@@ -1,0 +1,186 @@
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+# Read-only by default; only the release job may write.
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # UNVERIFIED: macos-latest moves over time and GitHub retires old Xcode
+  # images. `latest-stable` keeps the workflow working across image rollovers;
+  # pin an explicit version (e.g. "16.4") once you have read the first run's
+  # `xcodebuild -version` output. See docs/BUILDING.md.
+  XCODE_VERSION: latest-stable
+
+jobs:
+  build:
+    name: Archive and package unsigned IPA
+    # UNVERIFIED: assumed to be a current macOS image with Xcode 16+ and
+    # CocoaPods preinstalled. Check the runner image in the job summary.
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    outputs:
+      ipa_name: ${{ steps.package.outputs.ipa_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          pod --version
+
+      - name: Install
+        run: npm ci
+
+      # No --no-install here on purpose: iOS needs CocoaPods, and `expo prebuild`
+      # installs pods unless --no-install is passed (confirmed via --help).
+      - name: Prebuild iOS
+        run: npx expo prebuild --platform ios
+
+      - name: Archive (unsigned)
+        run: |
+          set -euo pipefail
+
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          ARCHIVE="$RUNNER_TEMP/app.xcarchive"
+          LOG="$RUNNER_TEMP/xcodebuild-archive.log"
+
+          echo "Workspace: $WORKSPACE"
+          echo "Scheme: $SCHEME"
+
+          echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+          set -o pipefail
+          xcodebuild archive \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee "$LOG"
+
+      - name: Package IPA and sanity-check
+        id: package
+        run: |
+          set -euo pipefail
+
+          VERSION=$(node -p "require('./package.json').version")
+          SHA7=$(echo "$GITHUB_SHA" | cut -c1-7)
+          IPA_NAME="ipod-player-${VERSION}-${SHA7}.ipa"
+          IPA="$RUNNER_TEMP/$IPA_NAME"
+
+          APP=$(ls -d "$ARCHIVE"/Products/Applications/*.app | head -n 1)
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+            echo "::error::No .app bundle in $ARCHIVE/Products/Applications"
+            exit 1
+          fi
+          echo "App bundle: $APP"
+
+          PLIST="$APP/Info.plist"
+          if [ ! -f "$PLIST" ]; then
+            echo "::error::Info.plist missing from $APP"
+            exit 1
+          fi
+
+          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw -o - "$PLIST")
+          SHORT_VERSION=$(plutil -extract CFBundleShortVersionString raw -o - "$PLIST")
+          BUILD_NUMBER=$(plutil -extract CFBundleVersion raw -o - "$PLIST" || echo "unknown")
+          EXECUTABLE=$(plutil -extract CFBundleExecutable raw -o - "$PLIST")
+
+          echo "CFBundleIdentifier: $BUNDLE_ID"
+          echo "CFBundleShortVersionString: $SHORT_VERSION"
+          echo "CFBundleVersion: $BUILD_NUMBER"
+          echo "CFBundleExecutable: $EXECUTABLE"
+
+          if [ ! -f "$APP/$EXECUTABLE" ]; then
+            echo "::error::Executable '$EXECUTABLE' missing from the app bundle"
+            exit 1
+          fi
+
+          PAYLOAD="$RUNNER_TEMP/Payload"
+          rm -rf "$PAYLOAD"
+          mkdir -p "$PAYLOAD"
+          cp -R "$APP" "$PAYLOAD/"
+
+          rm -f "$IPA"
+          ( cd "$RUNNER_TEMP" && zip -qry "$IPA" Payload )
+
+          if [ ! -f "$IPA" ]; then
+            echo "::error::IPA was not created"
+            exit 1
+          fi
+
+          echo "IPA: $IPA ($(wc -c < "$IPA") bytes)"
+          echo "ipa_name=$IPA_NAME" >> "$GITHUB_OUTPUT"
+          echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipod-player-ipa
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload xcodebuild logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-logs
+          path: |
+            ${{ runner.temp }}/*.log
+            ios/build/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: ipod-player-ipa
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ needs.build.outputs.ipa_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true

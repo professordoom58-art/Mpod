@@ -11,12 +11,23 @@ expo-env.d.ts
 
 # Native
 .kotlin/
+android/
+ios/
 *.orig.*
 *.jks
+*.keystore
 *.p8
 *.p12
 *.key
 *.mobileprovision
+local.properties
+.gradle/
+build/
+
+# Android/iOS build artifacts
+*.apk
+*.aab
+*.ipa
 
 # Metro
 .metro-health-check*
@@ -25,17 +36,19 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
+
+# local env files
+.env
+.env.*
+!.env.example
 
 # macOS
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
-
 # typescript
 *.tsbuildinfo
 
-# generated native folders
-/ios
-/android
+# tests
+coverage/

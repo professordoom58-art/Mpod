@@ -1,0 +1,186 @@
+name: Android release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      arm64-only:
+        description: Build arm64-v8a only
+        type: boolean
+        default: true
+  push:
+    tags: ['v*']
+
+# Read-only by default; only the release job may write.
+permissions:
+  contents: read
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    outputs:
+      apk_name: ${{ steps.meta.outputs.apk_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Pure-function checks
+        run: npm run check:pure
+
+      # `--no-install` skips npm install AND CocoaPods (confirmed via
+      # `npx expo prebuild --help`). npm ci already ran, and Android needs no pods.
+      # VERSION_CODE feeds app.config.ts -> android.versionCode.
+      - name: Prebuild Android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Restrict to arm64-v8a
+        if: github.event_name == 'workflow_dispatch' && inputs.arm64-only
+        run: echo "reactNativeArchitectures=arm64-v8a" >> android/gradle.properties
+
+      - name: Build release APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Compute artifact name
+        id: meta
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          SHA7=$(echo "$GITHUB_SHA" | cut -c1-7)
+          echo "apk_base=ipod-player-${VERSION}-${SHA7}" >> "$GITHUB_OUTPUT"
+          echo "apk_name=ipod-player-${VERSION}-${SHA7}.apk" >> "$GITHUB_OUTPUT"
+
+      # Secrets cannot be referenced from an `if:` expression, so probe them in
+      # the shell and expose only a boolean. Values are never printed.
+      - name: Probe signing secrets
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sign APK with release keystore
+        if: steps.signing.outputs.available == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+
+          KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          # Delete the decoded keystore whatever happens next.
+          trap 'rm -f "$KEYSTORE_FILE"' EXIT
+
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          BUILD_TOOLS=$(ls -1 "$SDK/build-tools" | sort -V | tail -n 1)
+          APKSIGNER="$SDK/build-tools/$BUILD_TOOLS/apksigner"
+          echo "Using apksigner from build-tools $BUILD_TOOLS"
+
+          ALIAS="${KEY_ALIAS:-ipod}"
+          INPUT="android/app/build/outputs/apk/release/app-release.apk"
+          OUTPUT="$RUNNER_TEMP/${{ steps.meta.outputs.apk_name }}"
+
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE_FILE" \
+            --ks-key-alias "$ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEYSTORE_PASSWORD \
+            --out "$OUTPUT" \
+            "$INPUT"
+
+          "$APKSIGNER" verify --print-certs "$OUTPUT"
+
+          echo "APK_PATH=$OUTPUT" >> "$GITHUB_ENV"
+
+      - name: Fall back to debug-key build
+        if: steps.signing.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          echo "::warning title=Debug-key APK::KEYSTORE_BASE64 / KEYSTORE_PASSWORD are not set. The APK is signed with the debug key, cannot be upgraded over a release-signed install, and must not be published as a real release."
+          INPUT="android/app/build/outputs/apk/release/app-release.apk"
+          OUTPUT="$RUNNER_TEMP/${{ steps.meta.outputs.apk_base }}-debugkey.apk"
+          cp "$INPUT" "$OUTPUT"
+          echo "APK_PATH=$OUTPUT" >> "$GITHUB_ENV"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipod-player-apk
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Gradle logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-logs
+          path: |
+            android/app/build/outputs/logs/
+            android/app/build/reports/
+            android/build/reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The only job that publishes, so the only one with write access.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: ipod-player-apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ needs.build.outputs.apk_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
