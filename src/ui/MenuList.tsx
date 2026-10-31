@@ -163,17 +163,20 @@ const styles = StyleSheet.create({
   },
   rowText: {
     fontSize: fonts.lcdRowSize,
+    fontWeight: '600',
   },
   rowTextDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
   rowSub: {
     fontSize: fonts.lcdSmallSize,
     marginTop: -1,
+    fontWeight: '400',
   },
   chevron: {
     fontSize: fonts.lcdRowSize,
     marginLeft: 6,
+    fontWeight: '700',
   },
   scrollbarTrack: {
     position: 'absolute',

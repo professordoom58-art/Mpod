@@ -19,13 +19,16 @@ function AppInner() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
 
-  const availableWidth = Math.max(0, width - insets.left - insets.right - 16);
-  // Keep the body on screen vertically too: if the screen is short, cap width.
-  const maxWidthFromHeight = Math.max(0, (height - insets.top - insets.bottom - 16) * 0.6);
+  const availableWidth = Math.max(0, width - insets.left - insets.right);
+  const availableHeight = Math.max(0, height - insets.top - insets.bottom);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <Body availableWidth={Math.min(availableWidth, maxWidthFromHeight)} showDebug={SHOW_DEBUG} />
+      <Body
+        availableWidth={availableWidth}
+        availableHeight={availableHeight}
+        showDebug={SHOW_DEBUG}
+      />
     </View>
   );
 }

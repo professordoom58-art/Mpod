@@ -1,10 +1,11 @@
 /**
- * The iPod body: rounded shell, 4:3 LCD, and the click wheel below.
- * Everything is derived from the measured body width so the wheel stays a
- * perfect circle on any screen.
+ * The iPod face: no outer shell. The whole viewport is the anodized-aluminum
+ * chassis, with just two vertically centred elements:
+ *   1. the LCD screen inside a thick black rounded bezel, and
+ *   2. the click wheel below it.
  *
- * This component is now pure layout plus gesture attachment. All navigation
- * state lives in the menu store; all library state in the library store.
+ * All wheel/gesture wiring, haptics and boot logic are unchanged; this file
+ * only controls layout and rendering.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -18,27 +19,39 @@ import { useLibraryStore } from '../library/store';
 import { setHapticsEnabled } from '../haptics/haptics';
 import { DebugOverlay } from './DebugOverlay';
 import { Screen } from './Screen';
-import { colors, layout, radii, wheel as wheelCfg } from './theme';
+import { colors, layout, radii, spacing, wheel as wheelCfg } from './theme';
 import { ClickWheel } from '../wheel/ClickWheel';
 import { useClickWheel, type Zone } from '../wheel/useClickWheel';
 
 type Props = {
   /** Available width from the parent (already inset-safe). */
   availableWidth: number;
+  /** Available height from the parent (already inset-safe). */
+  availableHeight: number;
   showDebug: boolean;
 };
 
-export function Body({ availableWidth, showDebug }: Props) {
+export function Body({ availableWidth, availableHeight, showDebug }: Props) {
   const [lastZone, setLastZone] = useState<Zone | null>(null);
   const [lastDir, setLastDir] = useState<1 | -1 | null>(null);
 
-  const bodyWidth = Math.min(availableWidth, layout.bodyMaxWidth);
-  const bodyHeight = bodyWidth / layout.bodyAspect;
-  const innerWidth = bodyWidth * (1 - layout.bodyPaddingRatio * 2);
+  // Sizes, capped, and scaled down if the stack would overflow the height.
+  const { screenWidth, screenHeight, wheelSize } = useMemo(() => {
+    let sw = Math.min(availableWidth * layout.screenWidthRatio, layout.screenMaxWidth);
+    let sh = sw / layout.screenAspect;
+    let wheel = Math.min(availableWidth * layout.wheelDiameterRatio, layout.wheelMaxDiameter);
 
-  const screenWidth = innerWidth * layout.screenWidthRatio;
-  const screenHeight = screenWidth / layout.screenAspect;
-  const wheelSize = innerWidth * layout.wheelDiameterRatio;
+    const bezelHeight = sh + spacing.bezelPadding * 2;
+    const needed = bezelHeight + layout.screenWheelGap + wheel;
+    if (needed > availableHeight && needed > 0) {
+      const scale = availableHeight / needed;
+      sw *= scale;
+      sh = sw / layout.screenAspect;
+      wheel *= scale;
+    }
+
+    return { screenWidth: sw, screenHeight: sh, wheelSize: wheel };
+  }, [availableWidth, availableHeight]);
 
   const { onStep, onTap, onMenuLongPress } = useWheelNav();
 
@@ -99,27 +112,25 @@ export function Body({ availableWidth, showDebug }: Props) {
     onMenuLongPress,
   });
 
-  const lcdStyle = useMemo(
-    () => ({ width: screenWidth, height: screenHeight, borderRadius: radii.screen }),
-    [screenWidth, screenHeight],
-  );
-
   return (
-    <View style={{ width: bodyWidth }}>
-      <View
-        style={[
-          styles.body,
-          {
-            width: bodyWidth,
-            height: bodyHeight,
-            paddingHorizontal: bodyWidth * layout.bodyPaddingRatio,
-            borderRadius: radii.body,
-          },
-        ]}
-      >
-        <View style={[styles.lcdWrap, lcdStyle]}>
+    <View
+      style={[styles.chassis, { width: availableWidth, height: availableHeight }]}
+    >
+      <View style={styles.stack}>
+        {/* Equals 1 equal-height segment above the screen. */}
+        <View style={styles.pusher} />
+        <View style={[styles.bezel, { width: screenWidth + spacing.bezelPadding * 2, borderRadius: radii.bezel }]}>
           <Screen width={screenWidth} height={screenHeight} playing={playing} />
         </View>
+
+        <View style={{ height: layout.screenWheelGap }} />
+
+        <GestureDetector gesture={gesture}>
+          <View collapsable={false}>
+            <ClickWheel size={wheelSize} innerRatio={layout.wheelInnerRatio} />
+          </View>
+        </GestureDetector>
+        <View style={styles.pusher} />
 
         {showDebug ? (
           <DebugOverlay
@@ -131,34 +142,27 @@ export function Body({ availableWidth, showDebug }: Props) {
             flushMs={80}
           />
         ) : null}
-
-        <View style={{ height: innerWidth * layout.screenWheelGapRatio }} />
-
-        <GestureDetector gesture={gesture}>
-          <View collapsable={false}>
-            <ClickWheel size={wheelSize} innerRatio={layout.wheelInnerRatio} />
-          </View>
-        </GestureDetector>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  body: {
-    backgroundColor: colors.body,
+  chassis: {
+    backgroundColor: colors.chassisBg,
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingTop: 0,
-    borderWidth: 1,
-    borderColor: colors.bodyEdge,
-    shadowColor: colors.bodyShadow,
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
+    justifyContent: 'center',
   },
-  lcdWrap: {
-    overflow: 'hidden',
+  stack: {
+    alignItems: 'center',
+  },
+  pusher: {
+    flex: 1,
+  },
+  bezel: {
+    backgroundColor: colors.bezel,
+    borderColor: colors.bezelEdge,
+    padding: spacing.bezelPadding,
+    borderWidth: StyleSheet.hairlineWidth,
   },
 });

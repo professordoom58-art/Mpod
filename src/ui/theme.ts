@@ -1,25 +1,24 @@
 /**
- * All visual proportions live here so a Figma hand-off only touches this file.
- * Every value is a ratio of the available body width unless noted.
+ * All visual proportions and the color LCD palette live here so a Figma
+ * hand-off only touches this file. Every value is a ratio of the available
+ * phone width unless noted.
  */
 
 export const layout = {
-  /** Body width : height. iPod classic is roughly 0.6. */
-  bodyAspect: 0.6,
-  /** Outer body horizontal padding, as a ratio of screen width. */
-  bodyPaddingRatio: 0.06,
-  /** Max body width in points, so it does not stretch on tablets. */
-  bodyMaxWidth: 430,
-  /** LCD width as a ratio of body inner width. */
-  screenWidthRatio: 0.92,
-  /** LCD aspect ratio (width / height). 4:3 landscape. */
-  screenAspect: 4 / 3,
-  /** Wheel diameter as a ratio of body inner width. */
-  wheelDiameterRatio: 0.9,
-  /** Wheel center button diameter as a ratio of wheel diameter. */
+  /** Max screen width in points, so it does not overstretch on tablets. */
+  screenMaxWidth: 320,
+  /** Screen width as a ratio of the available phone width. */
+  screenWidthRatio: 0.84,
+  /** LCD aspect ratio (width / height). figPod screen is squarish, ~4:4.2. */
+  screenAspect: 4 / 4.2,
+  /** Max wheel diameter in points. */
+  wheelMaxDiameter: 270,
+  /** Wheel diameter as a ratio of the available phone width. */
+  wheelDiameterRatio: 0.74,
+  /** Center Select button diameter as a ratio of the wheel diameter. */
   wheelInnerRatio: 0.36,
-  /** Gap between screen and wheel, as a ratio of body inner width. */
-  screenWheelGapRatio: 0.06,
+  /** Gap between the screen bezel and the wheel. */
+  screenWheelGap: 36,
 } as const;
 
 export const wheel = {
@@ -32,64 +31,83 @@ export const wheel = {
 } as const;
 
 /**
- * LCD palettes. "classic" is the grey-green iPod LCD; "light" is the neutral
- * option for daylight readability. Both are complete so a swap needs no
- * per-component changes.
+ * Color LCD palettes. "color" is the figPod colour-LCD look: white screen,
+ * black text, iPod Classic blue highlight. Kept as a palette map so a theme
+ * swap needs no per-component changes.
  */
 export const lcdPalettes = {
-  classic: {
-    background: '#C7D6C0',
-    border: '#2E2E2E',
-    text: '#1E241C',
-    textDim: '#5A6656',
-    highlightBackground: '#2C3A2A',
-    highlightText: '#DCE8D4',
-    scrollbarTrack: '#B3C4AC',
-    scrollbarThumb: '#5A6656',
-    titleBarBorder: '#8FA089',
-    progressTrack: '#AEBFA7',
-    progressFill: '#2C3A2A',
+  color: {
+    background: '#FFFFFF',
+    border: '#FFFFFF',
+    text: '#111111',
+    textDim: '#6B7280',
+    highlightBackground: '#2B72E6',
+    highlightText: '#FFFFFF',
+    scrollbarTrack: '#E5E7EB',
+    scrollbarThumb: '#8E95A2',
+    titleBarBorder: '#D0D4DC',
+    progressTrack: '#E0E2E8',
+    progressFill: '#1E69DE',
   },
-  light: {
-    background: '#E8E8E4',
-    border: '#2E2E2E',
+  /** Slightly warmer variant, kept for completeness. */
+  graphite: {
+    background: '#FFFFFF',
+    border: '#FFFFFF',
     text: '#1A1A1A',
-    textDim: '#6B6B66',
-    highlightBackground: '#2E2E2E',
-    highlightText: '#F2F2EE',
-    scrollbarTrack: '#CFCFC8',
-    scrollbarThumb: '#6B6B66',
-    titleBarBorder: '#B0B0A8',
-    progressTrack: '#C8C8C0',
-    progressFill: '#2E2E2E',
+    textDim: '#6B7280',
+    highlightBackground: '#1E69DE',
+    highlightText: '#FFFFFF',
+    scrollbarTrack: '#E5E7EB',
+    scrollbarThumb: '#8E95A2',
+    titleBarBorder: '#D0D4DC',
+    progressTrack: '#E0E2E8',
+    progressFill: '#1E69DE',
   },
 } as const;
 
 export type LcdPaletteName = keyof typeof lcdPalettes;
 export type LcdPalette = (typeof lcdPalettes)[LcdPaletteName];
 
-export const DEFAULT_LCD_PALETTE: LcdPaletteName = 'classic';
+export const DEFAULT_LCD_PALETTE: LcdPaletteName = 'color';
 
 export const colors = {
-  pageBackground: '#C9CDD2',
-  body: '#F4F4F2',
-  bodyEdge: '#D8D8D4',
-  bodyShadow: '#000000',
+  /** The whole phone viewport acts as the iPod face. */
+  pageBackground: '#E8ECF2',
+  chassisBg: '#E8ECF2',
+  /** Thick black bezel framing the LCD. */
+  bezel: '#0A0A0C',
+  bezelEdge: '#000000',
+  /** Screen's light silver status header (non-nowplaying). */
+  headerBg: '#EAECEF',
+  headerBorder: '#D0D4DC',
+  headerText: '#111111',
+  /** Dark charcoal nowplaying header / metadata. */
+  npHeader: '#2B2B2E',
+  npHeaderText: '#FFFFFF',
+  npMetaBg: '#232427',
+  npTitleText: '#FFFFFF',
+  npArtistText: '#D1D5DB',
+  npIndexText: '#9CA3AF',
+  /** Retro fallback cover gradient endpoints. */
+  npFallbackFrom: '#6D5BD0',
+  npFallbackTo: '#1F2937',
+  npFallbackAccent: '#FFFFFF',
+  /** Click wheel. */
   wheelFace: '#FFFFFF',
-  wheelRing: '#E4E4E1',
-  wheelRingEdge: '#CFCFCB',
-  wheelCenter: '#F7F7F5',
-  wheelCenterEdge: '#D2D2CE',
-  wheelLabel: '#8A8A86',
-  // Flat aliases kept for the Phase 1 components; they mirror "classic".
-  lcdBackground: lcdPalettes.classic.background,
-  lcdBorder: lcdPalettes.classic.border,
-  lcdText: lcdPalettes.classic.text,
-  lcdTextDim: lcdPalettes.classic.textDim,
-  lcdHighlightBackground: lcdPalettes.classic.highlightBackground,
-  lcdHighlightText: lcdPalettes.classic.highlightText,
-  lcdScrollbarTrack: lcdPalettes.classic.scrollbarTrack,
-  lcdScrollbarThumb: lcdPalettes.classic.scrollbarThumb,
+  wheelRing: '#FFFFFF',
+  wheelRingEdge: '#D4D8E0',
+  wheelCenter: '#ECEFF4',
+  wheelCenterEdge: '#C5CBD6',
+  wheelLabel: '#7A828E',
+  // Flat aliases kept for the Phase 1 components; they mirror "color".
+  lcdBackground: lcdPalettes.color.background,
+  lcdBorder: lcdPalettes.color.border,
+  lcdText: lcdPalettes.color.text,
+  lcdTextDim: lcdPalettes.color.textDim,
+  lcdHighlightBackground: lcdPalettes.color.highlightBackground,
+  lcdHighlightText: lcdPalettes.color.highlightText,
+  lcdScrollbarTrack: lcdPalettes.color.scrollbarTrack,
+  lcdScrollbarThumb: lcdPalettes.color.scrollbarThumb,
   debugBackground: '#111111',
   debugText: '#7CFF9B',
 } as const;
@@ -103,20 +121,21 @@ export const fonts = {
 } as const;
 
 export const radii = {
-  body: 18,
-  screen: 3,
+  bezel: 16,
+  screen: 10,
   wheel: 999,
 } as const;
 
 export const spacing = {
+  bezelPadding: 6,
   lcdPaddingH: 6,
   lcdPaddingV: 4,
-  lcdRowHeight: 20,
-  titleBarHeight: 18,
+  lcdRowHeight: 32,
+  titleBarHeight: 22,
   scrollbarWidth: 4,
   scrollbarInset: 2,
   /** Extra height for a row that carries a sub-label. */
-  lcdRowWithSubHeight: 28,
+  lcdRowWithSubHeight: 30,
   /** Height of the optional bottom status line. */
   statusLineHeight: 16,
 } as const;

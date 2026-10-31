@@ -15,6 +15,7 @@ type PlayerState = {
   index: number;
   playing: boolean;
   current: Track | null;
+  positionMs: number;
   requestPlay: (queue: Track[], startIndex: number) => void;
   togglePlay: () => void;
   next: () => void;
@@ -33,12 +34,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   index: 0,
   playing: false,
   current: null,
+  positionMs: 0,
 
   requestPlay: (queue, startIndex) => {
     if (queue.length === 0) return;
     const index = Math.min(Math.max(startIndex, 0), queue.length - 1);
     const current = queue[index];
-    set({ queue, index, current, playing: true });
+    set({ queue, index, current, playing: true, positionMs: 0 });
     console.log('[player stub] requestPlay', current.title, '-', current.artist);
     onNowPlaying?.(current);
   },
@@ -55,7 +57,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (queue.length === 0) return;
     const nextIndex = (index + 1) % queue.length;
     const current = queue[nextIndex];
-    set({ index: nextIndex, current, playing: true });
+    set({ index: nextIndex, current, playing: true, positionMs: 0 });
     console.log('[player stub] next ->', current.title);
     onNowPlaying?.(current);
   },
@@ -65,7 +67,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     if (queue.length === 0) return;
     const prevIndex = (index - 1 + queue.length) % queue.length;
     const current = queue[prevIndex];
-    set({ index: prevIndex, current, playing: true });
+    set({ index: prevIndex, current, playing: true, positionMs: 0 });
     console.log('[player stub] prev ->', current.title);
     onNowPlaying?.(current);
   },

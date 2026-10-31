@@ -1,12 +1,13 @@
 /**
- * The LCD frame: fixed 4:3 body with a title bar (play indicator, centered
- * title, battery icon) and a body area that renders the current frame.
+ * The LCD frame: a title bar (play indicator, centered title, battery icon)
+ * and a body area that renders the current frame.
  *
- * This component owns no navigation logic. It reads the top frame through
- * narrow selectors and renders it.
+ * The title bar is styled per frame kind: a light silver header on regular
+ * menus, or a dark charcoal header on the Now Playing screen. All navigation
+ * logic lives in the menu store; this component only renders.
  */
 
-import React, { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 
@@ -21,35 +22,27 @@ import {
   useMenuStore,
 } from '../nav/menuStack';
 import { MenuList } from './MenuList';
+import { NowPlaying } from './NowPlaying';
 import { ProgressView } from './ProgressView';
-import {
-  DEFAULT_LCD_PALETTE,
-  fonts,
-  lcdPalettes,
-  spacing,
-  type LcdPalette,
-  type LcdPaletteName,
-} from './theme';
+import { colors, fonts, lcdPalettes, spacing, type LcdPalette } from './theme';
 import { visibleRowCount } from './windowing';
 
 type Props = {
   width: number;
   height: number;
   playing: boolean;
-  paletteName?: LcdPaletteName;
+  paletteName?: keyof typeof lcdPalettes;
 };
 
 /** Battery glyph, drawn rather than imported so it scales with the LCD. */
-function BatteryIcon({ color, level }: { color: string; level: number }) {
+function BatteryIcon({ color }: { color: string }) {
   const w = 16;
   const h = 8;
-  const fillWidth = Math.max(1, Math.round((w - 4) * Math.min(1, Math.max(0, level))));
-
   return (
     <Svg width={w + 2} height={h} viewBox={`0 0 ${w + 2} ${h}`}>
       <Rect x={0.5} y={0.5} width={w - 1} height={h - 1} rx={1.5} stroke={color} strokeWidth={1} fill="none" />
       <Rect x={w} y={h / 2 - 2} width={2} height={4} rx={0.5} fill={color} />
-      <Rect x={2} y={2} width={fillWidth} height={h - 4} rx={0.5} fill={color} />
+      <Rect x={2} y={2} width={10} height={h - 4} rx={0.5} fill={color} />
     </Svg>
   );
 }
@@ -63,7 +56,7 @@ function PlayIndicator({ color }: { color: string }) {
   );
 }
 
-export function Screen({ width, height, playing, paletteName = DEFAULT_LCD_PALETTE }: Props) {
+export function Screen({ width, height, playing, paletteName = 'color' }: Props) {
   const palette: LcdPalette = lcdPalettes[paletteName];
 
   const title = useMenuStore(selectTopTitle);
@@ -83,9 +76,22 @@ export function Screen({ width, height, playing, paletteName = DEFAULT_LCD_PALET
   const rows = visibleRowCount(bodyHeight, spacing.lcdRowHeight);
 
   // Keep the store's window math in sync with the real pixel height.
-  React.useEffect(() => {
+  useEffect(() => {
     setVisibleRows(rows);
   }, [rows, setVisibleRows]);
+
+  // The Now Playing screen owns its own dark header, artwork and metadata, so
+  // it renders as a single full-body frame without the shared title bar.
+  if (kind === 'nowplaying') {
+    return (
+      <NowPlaying width={width} height={height} playing={playing} />
+    );
+  }
+
+  // Regular menus get the light silver header; Now Playing owns its own dark one.
+  const headerBg = colors.headerBg;
+  const headerText = colors.headerText;
+  const headerBorder = colors.headerBorder;
 
   const content = useMemo(() => {
     if (kind === 'progress') {
@@ -117,32 +123,27 @@ export function Screen({ width, height, playing, paletteName = DEFAULT_LCD_PALET
   ]);
 
   return (
-    <View
-      style={[
-        styles.lcd,
-        { width, height, backgroundColor: palette.background, borderColor: palette.border },
-      ]}
-    >
+    <View style={[styles.lcd, { width, height, backgroundColor: palette.background }]}>
       <View
         style={[
           styles.titleBar,
-          { height: spacing.titleBarHeight, borderBottomColor: palette.titleBarBorder },
+          { height: spacing.titleBarHeight, backgroundColor: headerBg, borderBottomColor: headerBorder },
         ]}
       >
         <View style={styles.titleLeft}>
-          {playing ? <PlayIndicator color={palette.text} /> : null}
+          {playing ? <PlayIndicator color={headerText} /> : null}
         </View>
 
         <Text
           numberOfLines={1}
           ellipsizeMode="tail"
-          style={[styles.titleText, { color: palette.text }]}
+          style={[styles.titleText, { color: headerText }]}
         >
           {title}
         </Text>
 
         <View style={styles.titleRight}>
-          <BatteryIcon color={palette.textDim} level={0.8} />
+          <BatteryIcon color={headerText} />
         </View>
       </View>
 
@@ -161,8 +162,8 @@ export function Screen({ width, height, playing, paletteName = DEFAULT_LCD_PALET
 
 const styles = StyleSheet.create({
   lcd: {
-    borderWidth: 1,
     overflow: 'hidden',
+    borderRadius: 10,
   },
   titleBar: {
     flexDirection: 'row',
@@ -171,11 +172,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   titleLeft: {
-    width: 20,
+    width: 22,
     alignItems: 'flex-start',
   },
   titleRight: {
-    width: 20,
+    width: 22,
     alignItems: 'flex-end',
   },
   titleText: {
