@@ -1,14 +1,15 @@
 name: Android release APK
 
 on:
+  push:
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       arm64-only:
         description: Build arm64-v8a only
         type: boolean
         default: true
-  push:
-    tags: ['v*']
 
 # Read-only by default; only the release job may write.
 permissions:
@@ -261,4 +262,45 @@ jobs:
         with:
           files: ${{ needs.build.outputs.apk_name }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  # Every push to main publishes a rolling prerelease, so a new commit always
+  # has a downloadable APK without a tag or a manual `gh workflow run`. The
+  # fixed asset name (and overwrite_files) keeps the release to one file
+  # instead of accumulating an asset per commit. Real releases stay tag-gated.
+  release-edge:
+    name: Publish rolling edge prerelease
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: ipod-player-apk
+          path: dist
+
+      - name: Normalise asset name
+        run: |
+          set -euo pipefail
+          APK=$(ls dist/*.apk | head -n 1)
+          cp "$APK" dist/ipod-player-edge.apk
+          rm -f "$APK"
+          ls -l dist
+
+      - name: Publish edge prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: edge
+          name: Edge build (main)
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          generate_release_notes: true
+          files: dist/ipod-player-edge.apk
           fail_on_unmatched_files: true

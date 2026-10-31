@@ -1,9 +1,10 @@
 name: iOS unsigned IPA
 
 on:
-  workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
+  workflow_dispatch:
 
 # Read-only by default; only the release job may write.
 permissions:
@@ -56,7 +57,12 @@ jobs:
 
       # No --no-install here on purpose: iOS needs CocoaPods, and `expo prebuild`
       # installs pods unless --no-install is passed (confirmed via --help).
+      # VERSION_CODE feeds app.config.ts -> ios.buildNumber. Without it every
+      # build reports build 1, and iOS refuses to install a same-or-lower build
+      # over one already on the phone.
       - name: Prebuild iOS
+        env:
+          VERSION_CODE: ${{ github.run_number }}
         run: npx expo prebuild --platform ios
 
       - name: Archive (unsigned)
@@ -183,4 +189,43 @@ jobs:
         with:
           files: ${{ needs.build.outputs.ipa_name }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  # Rolling prerelease per commit on main, mirroring build-apk.yml. Same fixed
+  # asset name so repeated builds replace one file instead of piling up.
+  release-edge:
+    name: Publish rolling edge prerelease
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: ipod-player-ipa
+          path: dist
+
+      - name: Normalise asset name
+        run: |
+          set -euo pipefail
+          IPA=$(ls dist/*.ipa | head -n 1)
+          cp "$IPA" dist/ipod-player-edge.ipa
+          rm -f "$IPA"
+          ls -l dist
+
+      - name: Publish edge prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: edge
+          name: Edge build (main)
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          generate_release_notes: true
+          files: dist/ipod-player-edge.ipa
           fail_on_unmatched_files: true

@@ -37,6 +37,19 @@ import { useMenuStore, type Row } from './menuStack';
 
 const isAndroid = Platform.OS === 'android';
 
+/**
+ * Runs an async action started from a tap without leaving a floating promise.
+ *
+ * Every menu row's onSelect is synchronous, so async work is necessarily
+ * fire-and-forget. `void promise` alone turns a DB or Linking failure into an
+ * unhandled rejection; this logs it instead and keeps the app alive.
+ */
+function fireAndForget(p: Promise<unknown>): void {
+  void p.catch((e) => {
+    console.error('[nav] action failed', e);
+  });
+}
+
 /** Empty-library message, worded per platform. */
 function emptyLibraryRow(): Row {
   return {
@@ -56,7 +69,7 @@ function permissionRows(): Row[] {
         label: 'Allow access',
         sub: 'Tap Select to grant',
         onSelect: () => {
-          void useLibraryStore.getState().requestPermission();
+          fireAndForget(useLibraryStore.getState().requestPermission());
         },
       },
     ];
@@ -68,7 +81,7 @@ function permissionRows(): Row[] {
         label: 'Open Settings',
         sub: 'Permission is off',
         onSelect: () => {
-          void Linking.openSettings();
+          fireAndForget(Linking.openSettings());
         },
       },
     ];
@@ -83,7 +96,7 @@ function trackRows(tracks: Awaited<ReturnType<typeof getTracks>>, queueIds: stri
     label: t.title,
     sub: t.artist,
     onSelect: () => {
-      void requestPlayByIds(queueIds, i);
+      fireAndForget(requestPlayByIds(queueIds, i));
     },
   }));
 }
@@ -100,7 +113,7 @@ function settingsRows(): Row[] {
       id: 'update-library',
       label: 'Update Library',
       onSelect: () => {
-        void runScan();
+        fireAndForget(runScan());
       },
     });
   }
@@ -109,7 +122,7 @@ function settingsRows(): Row[] {
     id: 'import-files',
     label: 'Import Files',
     onSelect: () => {
-      void runImport();
+      fireAndForget(runImport());
     },
   });
 
@@ -118,7 +131,7 @@ function settingsRows(): Row[] {
     label: 'Library Info',
     chevron: true,
     onSelect: () => {
-      pushLibraryInfo();
+      fireAndForget(pushLibraryInfo());
     },
   });
 
@@ -285,16 +298,17 @@ async function pushWheelTick(): Promise<void> {
     items.push({
       id: `tick-${deg}`,
       label: `${deg} degrees`,
-      sub: deg === settings.wheelTickDeg ? 'Selected' : undefined,
-      onSelect: () => {
-        void (async () => {
-          const applied = await setWheelTickDeg(deg);
-          const settings = await loadSettings();
-          useLibraryStore.getState().setSettings(settings);
-          useMenuStore.getState().pop();
-          useMenuStore.getState().setStatus(`Wheel tick: ${applied} degrees`);
-        })();
-      },
+      sub: deg === settings.wheelTickDeg ? 'Selected' : undefined,        onSelect: () => {
+          fireAndForget(
+            (async () => {
+              const applied = await setWheelTickDeg(deg);
+              const settings = await loadSettings();
+              useLibraryStore.getState().setSettings(settings);
+              useMenuStore.getState().pop();
+              useMenuStore.getState().setStatus(`Wheel tick: ${applied} degrees`);
+            })(),
+          );
+        },
     });
   }
 
@@ -310,14 +324,16 @@ async function pushWheelTick(): Promise<void> {
 async function pushHaptics(): Promise<void> {
   const settings = await loadSettings();
   const apply = (on: boolean) => {
-    void (async () => {
-      await persistHaptics(on);
-      setHapticsEnabled(on);
-      const settings = await loadSettings();
-      useLibraryStore.getState().setSettings(settings);
-      useMenuStore.getState().pop();
-      useMenuStore.getState().setStatus(`Haptics ${on ? 'on' : 'off'}`);
-    })();
+    fireAndForget(
+      (async () => {
+        await persistHaptics(on);
+        setHapticsEnabled(on);
+        const settings = await loadSettings();
+        useLibraryStore.getState().setSettings(settings);
+        useMenuStore.getState().pop();
+        useMenuStore.getState().setStatus(`Haptics ${on ? 'on' : 'off'}`);
+      })(),
+    );
   };
 
   useMenuStore.getState().push({
@@ -339,15 +355,17 @@ async function pushMinTrackLength(): Promise<void> {
     label: ms === 0 ? 'Off' : `${ms / 1000} seconds`,
     sub: ms === settings.minTrackLengthMs ? 'Selected' : undefined,
     onSelect: () => {
-      void (async () => {
-        await setMinTrackLengthMs(ms);
-        const settings = await loadSettings();
-        useLibraryStore.getState().setSettings(settings);
-        useMenuStore.getState().pop();
-        useMenuStore.getState().setStatus(
-          ms === 0 ? 'Min length: off' : `Min length: ${ms / 1000}s`,
-        );
-      })();
+      fireAndForget(
+        (async () => {
+          await setMinTrackLengthMs(ms);
+          const settings = await loadSettings();
+          useLibraryStore.getState().setSettings(settings);
+          useMenuStore.getState().pop();
+          useMenuStore.getState().setStatus(
+            ms === 0 ? 'Min length: off' : `Min length: ${ms / 1000}s`,
+          );
+        })(),
+      );
     },
   }));
 
@@ -382,11 +400,13 @@ function pushResetConfirm(): void {
         label: 'Reset Library',
         sub: 'Removes all indexed tracks',
         onSelect: () => {
-          void (async () => {
-            await useLibraryStore.getState().resetLibrary();
-            useMenuStore.getState().popToRoot();
-            useMenuStore.getState().setStatus('Library reset');
-          })();
+          fireAndForget(
+            (async () => {
+              await useLibraryStore.getState().resetLibrary();
+              useMenuStore.getState().popToRoot();
+              useMenuStore.getState().setStatus('Library reset');
+            })(),
+          );
         },
       },
       {
@@ -581,10 +601,9 @@ export function buildRootItems(): Row[] {
     { id: 'music', label: 'Music', chevron: true, onSelect: pushMusic },
     {
       id: 'shuffle',
-      label: 'Shuffle Songs',
-      onSelect: () => {
-        void shuffleSongs();
-      },
+      label: 'Shuffle Songs',        onSelect: () => {
+          fireAndForget(shuffleSongs());
+        },
     },
     { id: 'settings', label: 'Settings', chevron: true, onSelect: pushSettings },
     {
@@ -592,7 +611,7 @@ export function buildRootItems(): Row[] {
       label: 'About',
       chevron: true,
       onSelect: () => {
-        void pushAbout();
+        fireAndForget(pushAbout());
       },
     },
   ];
@@ -613,10 +632,12 @@ export function offerFirstRun(): void {
         label: 'Load Music',
         sub: 'Scan this device',
         onSelect: () => {
-          void (async () => {
-            useMenuStore.getState().pop();
-            await runScan();
-          })();
+          fireAndForget(
+            (async () => {
+              useMenuStore.getState().pop();
+              await runScan();
+            })(),
+          );
         },
       },
       {

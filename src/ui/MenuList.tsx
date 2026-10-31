@@ -41,6 +41,7 @@ type RowViewProps = {
   row: Row;
   selected: boolean;
   rowHeight: number;
+  width: number;
   palette: LcdPalette;
 };
 
@@ -48,15 +49,9 @@ type RowViewProps = {
  * The blue pill. Drawn as an absolutely-positioned SVG layer so the text above
  * it stays a plain <Text> with no gradient clipping quirks.
  */
-function SelectionPill() {
+function SelectionPill({ width, height }: { width: number; height: number }) {
   return (
-    <Svg
-      style={StyleSheet.absoluteFill}
-      width="100%"
-      height="100%"
-      preserveAspectRatio="none"
-      viewBox="0 0 100 100"
-    >
+    <Svg style={StyleSheet.absoluteFill} width={width} height={height}>
       <Defs>
         <LinearGradient id="pillBlue" x1="0" y1="0" x2="0" y2="1">
           <Stop offset="0" stopColor={PILL_TOP} />
@@ -64,22 +59,22 @@ function SelectionPill() {
           <Stop offset="1" stopColor={PILL_BOTTOM} />
         </LinearGradient>
       </Defs>
-      <Rect x="0" y="0" width="100" height="100" fill="url(#pillBlue)" />
+      <Rect x={0} y={0} width={width} height={height} fill="url(#pillBlue)" />
       {/* 1px top highlight: the lit edge of a convex pill. */}
-      <Rect x="0" y="0" width="100" height="1.6" fill={PILL_TOP_HIGHLIGHT} />
+      <Rect x={0} y={0} width={width} height={1} fill={PILL_TOP_HIGHLIGHT} />
       {/* 1px bottom edge: the shadowed underside. */}
-      <Rect x="0" y="98.4" width="100" height="1.6" fill={PILL_BOTTOM_EDGE} />
+      <Rect x={0} y={height - 1} width={width} height={1} fill={PILL_BOTTOM_EDGE} />
     </Svg>
   );
 }
 
-const RowView = memo(function RowView({ row, selected, rowHeight, palette }: RowViewProps) {
+const RowView = memo(function RowView({ row, selected, rowHeight, width, palette }: RowViewProps) {
   const textColor = selected ? PILL_TEXT : palette.text;
   const dimColor = selected ? PILL_TEXT : palette.textDim;
 
   return (
-    <View style={[styles.row, { height: rowHeight }]}>
-      {selected ? <SelectionPill /> : null}
+    <View style={[styles.row, { height: rowHeight, width }]}>
+      {selected ? <SelectionPill width={width} height={rowHeight} /> : null}
 
       <View style={styles.rowTextWrap}>
         <Text
@@ -155,6 +150,7 @@ export function MenuList({
             row={row}
             selected={index === selectedIndex}
             rowHeight={rowHeight}
+            width={width}
             palette={palette}
           />
         );

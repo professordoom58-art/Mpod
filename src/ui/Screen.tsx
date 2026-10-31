@@ -152,28 +152,27 @@ function BatteryIcon({ level }: { level: number }) {
  * The brushed-metal title bar. Subscribes to `playing` itself so the play
  * indicator can change without re-rendering the list below it.
  */
-function ScreenHeader({ title }: { title: string }) {
+function ScreenHeader({ title, width }: { title: string; width: number }) {
   const playing = usePlayerStore((s) => s.playing);
+  const h = spacing.titleBarHeight;
 
   return (
-    <View style={[styles.titleBar, { height: spacing.titleBarHeight }]}>
-      {/* Metallic gradient + hairline bottom edge, drawn behind the content. */}
-      <Svg
-        style={StyleSheet.absoluteFill}
-        width="100%"
-        height="100%"
-        preserveAspectRatio="none"
-        viewBox="0 0 100 100"
-      >
+    <View style={[styles.titleBar, { height: h }]}>
+      {/*
+        Metallic gradient + hairline bottom edge, drawn behind the content.
+        Drawn in pixel units (no viewBox) so the 1px border is exactly 1 point
+        instead of being scaled by a normalized coordinate space.
+      */}
+      <Svg style={StyleSheet.absoluteFill} width={width} height={h}>
         <Defs>
           <LinearGradient id="headerMetal" x1="0" y1="0" x2="0" y2="1">
             <Stop offset="0" stopColor={HEADER_FROM} />
             <Stop offset="1" stopColor={HEADER_TO} />
           </LinearGradient>
         </Defs>
-        <Rect x="0" y="0" width="100" height="100" fill="url(#headerMetal)" />
-        {/* 1px bottom border, expressed in the 0..100 viewBox. */}
-        <Rect x="0" y="99" width="100" height="1" fill={HEADER_BORDER} />
+        <Rect x={0} y={0} width={width} height={h} fill="url(#headerMetal)" />
+        {/* 1px bottom border. */}
+        <Rect x={0} y={h - 1} width={width} height={1} fill={HEADER_BORDER} />
       </Svg>
 
       <View style={styles.titleLeft}>{playing ? <PlayPauseGlyph playing /> : null}</View>
@@ -252,7 +251,7 @@ export function Screen({ width, height, paletteName = 'color' }: Props) {
 
   return (
     <View style={[styles.lcd, { width, height, backgroundColor: palette.background }]}>
-      <ScreenHeader title={title} />
+      <ScreenHeader title={title} width={width} />
 
       {listContent}
 
@@ -271,13 +270,7 @@ export function Screen({ width, height, paletteName = 'color' }: Props) {
         Pointer-transparent so they never eat a tap.
       */}
       <View style={styles.bevel} pointerEvents="none">
-        <Svg
-          style={StyleSheet.absoluteFill}
-          width="100%"
-          height="100%"
-          preserveAspectRatio="none"
-          viewBox="0 0 100 100"
-        >
+        <Svg style={StyleSheet.absoluteFill} width={width} height={height}>
           <Defs>
             <LinearGradient id="bevelGloss" x1="0" y1="0" x2="1" y2="1">
               <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.34} />
@@ -286,10 +279,10 @@ export function Screen({ width, height, paletteName = 'color' }: Props) {
             </LinearGradient>
           </Defs>
           {/* Diagonal gloss sweep. */}
-          <Path d="M0 0 H100 L0 62 Z" fill="url(#bevelGloss)" />
+          <Path d={`M0 0 H${width} L0 ${height * 0.62} Z`} fill="url(#bevelGloss)" />
           {/* 1px top and left highlight. */}
-          <Rect x="0" y="0" width="100" height="0.6" fill="#FFFFFF" opacity={0.7} />
-          <Rect x="0" y="0" width="0.6" height="100" fill="#FFFFFF" opacity={0.45} />
+          <Rect x={0} y={0} width={width} height={1} fill="#FFFFFF" opacity={0.7} />
+          <Rect x={0} y={0} width={1} height={height} fill="#FFFFFF" opacity={0.45} />
         </Svg>
       </View>
     </View>

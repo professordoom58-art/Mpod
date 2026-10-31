@@ -56,7 +56,12 @@ function getEngine(): PlayerEngine {
   if (!engine) {
     const impl = new ExpoAudioEngine();
     engine = impl;
-    void configureAudioMode();
+    // Configure the audio session once. A rejected setAudioModeAsync (e.g. a
+    // missing native module in an old dev client) must not surface as an
+    // unhandled rejection; playback then simply uses the default session.
+    void configureAudioMode().catch((e) => {
+      console.error('[player] configureAudioMode failed', e);
+    });
   }
   return engine;
 }
