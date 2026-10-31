@@ -16,6 +16,8 @@
  * 3. Tap dead zones: 10 degrees either side of each sector boundary resolves
  *    to no zone, so a tap near a boundary does nothing instead of firing the
  *    wrong button.
+ * 4. Long-press MENU (500 ms) is raced ahead of tap, so holding MENU jumps to
+ *    the root menu instead of also registering a short press.
  *
  * The debug shared values (dbg*) are read-only for the overlay and never
  * influence control flow.
@@ -185,7 +187,7 @@ export function useClickWheel({
       });
 
     const longPressMenu = Gesture.LongPress()
-      .minDuration(600)
+      .minDuration(500)
       .maxDistance(8)
       .onStart((e) => {
         const dx = e.x - c;

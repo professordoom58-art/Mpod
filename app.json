@@ -25,7 +25,8 @@
         }
       ],
       "expo-sqlite",
-      "expo-document-picker"
+      "expo-document-picker",
+      "./plugins/withMedia3Resolution"
     ],
     "ios": {
       "supportsTablet": true,

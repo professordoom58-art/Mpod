@@ -13,6 +13,7 @@
 
 import { create } from 'zustand';
 
+import { savePlaybackSession } from '../library/settings';
 import type { Track } from '../library/types';
 import { ExpoAudioEngine, configureAudioMode } from './expoAudio';
 import type { PlayerEngine } from './engine';
@@ -31,6 +32,11 @@ type PlayerState = {
   prev: () => void;
   seek: (ms: number) => void;
   setVolume: (v: number) => void;
+  /**
+   * Cold-boot resume: pre-populates the screen in a paused state without
+   * touching the engine. The first togglePlay() loads and seeks.
+   */
+  restoreSession: (track: Track, positionMs: number) => void;
 };
 
 /** Set by the nav layer so the store can push a frame without importing it. */
@@ -51,6 +57,23 @@ let statusSubscribed = false;
  * didJustFinish=false update after the advance, and by every fresh load.
  */
 let advancePending = false;
+
+/**
+ * Position the next play() must jump to, set by restoreSession(). null means
+ * no pending resume, i.e. a normal load/play path.
+ */
+let resumePending: number | null = null;
+
+/** Throttle for the ~5 s playback checkpoint written to SQLite. */
+const PERSIST_INTERVAL_MS = 5000;
+let lastPersistAt = 0;
+
+function persistSession(): void {
+  const { current, positionMs } = usePlayerStore.getState();
+  void savePlaybackSession(current?.id ?? null, positionMs).catch((e) => {
+    console.error('[player] session save failed', e);
+  });
+}
 
 function getEngine(): PlayerEngine {
   if (!engine) {
@@ -85,7 +108,15 @@ function advanceTo(i: number, dir: 1 | -1): void {
   usePlayerStore.setState({ index: idx, current, positionMs: 0, playing: true });
 
   const eng = getEngine();
-  if (dir === 1) {
+  if (resumePending !== null) {
+    // A cold-boot session was never loaded into the engine, so next()/prev()
+    // would move a queue the engine does not have. Load the new index instead.
+    resumePending = null;
+    void eng.load(s.queue, idx).catch((e) => {
+      console.error('[player] advance after resume failed', e);
+      usePlayerStore.setState({ playing: false });
+    });
+  } else if (dir === 1) {
     eng.next();
   } else {
     eng.prev();
@@ -118,6 +149,15 @@ function ensureSubscription(): void {
       usePlayerStore.setState({ index: status.index, current: t ?? s.current, positionMs: status.positionMs });
     }
 
+    // ~5 s checkpoint so a cold boot can resume the current position.
+    const now = Date.now();
+    if (status.playing && now - lastPersistAt >= PERSIST_INTERVAL_MS) {
+      lastPersistAt = now;
+      void savePlaybackSession(s.current?.id ?? null, status.positionMs).catch((e) => {
+        console.error('[player] session save failed', e);
+      });
+    }
+
     usePlayerStore.setState({
       positionMs: status.positionMs,
       playing: status.playing,
@@ -140,6 +180,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const index = Math.min(Math.max(startIndex, 0), queue.length - 1);
     const current = queue[index];
     advancePending = false;
+    resumePending = null;
+    lastPersistAt = 0;
     set({ queue, index, current, playing: true, positionMs: 0, durationMs: current.durationMs || 0 });
     console.log('[player] requestPlay', current.title, '-', current.artist);
 
@@ -158,13 +200,42 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   },
 
   togglePlay: () => {
-    const { current, playing } = get();
+    const { current, playing, queue, index } = get();
     if (!current) return;
-    const eng = getEngine();
-    if (playing) eng.pause();
-    else eng.play();
-    set({ playing: !playing });
-    console.log('[player] togglePlay ->', !playing);
+
+    if (playing) {
+      getEngine().pause();
+      set({ playing: false });
+      // Pausing is the other checkpoint: the position the user stopped at is
+      // exactly the one a cold boot should resume.
+      persistSession();
+      console.log('[player] togglePlay -> false');
+      return;
+    }
+
+    // Resuming a cold-boot session: nothing is loaded in the engine yet, so
+    // load (which starts playback) and then jump to the saved position.
+    if (resumePending !== null) {
+      const at = resumePending;
+      resumePending = null;
+      set({ playing: true });
+      ensureSubscription();
+      void getEngine()
+        .load(queue, index)
+        .then(() => {
+          if (at > 0) getEngine().seek(at);
+        })
+        .catch((e) => {
+          console.error('[player] resume failed', e);
+          usePlayerStore.setState({ playing: false });
+        });
+      console.log('[player] togglePlay -> resume at', at);
+      return;
+    }
+
+    getEngine().play();
+    set({ playing: true });
+    console.log('[player] togglePlay -> true');
   },
 
   next: () => {
@@ -189,6 +260,21 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const clamped = Math.min(1, Math.max(0, v));
     getEngine().setVolume(clamped);
     set({ volume: clamped });
+  },
+
+  restoreSession: (track, positionMs) => {
+    const at = Math.max(0, Math.round(positionMs));
+    resumePending = at;
+    lastPersistAt = 0;
+    set({
+      queue: [track],
+      index: 0,
+      current: track,
+      playing: false,
+      positionMs: at,
+      durationMs: track.durationMs || 0,
+    });
+    console.log('[player] restored session', track.title, 'at', at);
   },
 }));
 

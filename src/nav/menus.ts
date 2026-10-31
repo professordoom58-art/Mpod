@@ -21,7 +21,9 @@ import {
   MIN_TRACK_LENGTH_CHOICES,
   WHEEL_TICK_MAX,
   WHEEL_TICK_MIN,
+  loadPlaybackSession,
   loadSettings,
+  setCaseColor,
   setHapticsEnabled as persistHaptics,
   setMinTrackLengthMs,
   setWheelTickDeg,
@@ -33,6 +35,8 @@ import {
   requestPlayByIds,
   shuffleAndPlay,
 } from '../player/playback';
+import { usePlayerStore } from '../player/store';
+import { CHASSIS_COLOR_ORDER, chassisPalettes } from '../ui/theme';
 import { useMenuStore, type Row } from './menuStack';
 
 const isAndroid = Platform.OS === 'android';
@@ -150,6 +154,16 @@ function settingsRows(): Row[] {
     chevron: true,
     onSelect: () => {
       pushHaptics();
+    },
+  });
+
+  rows.push({
+    id: 'case-color',
+    label: 'Case Color',
+    chevron: true,
+    sub: chassisPalettes[useLibraryStore.getState().settings?.caseColor ?? 'silver'].label,
+    onSelect: () => {
+      fireAndForget(pushCaseColor());
     },
   });
 
@@ -345,6 +359,38 @@ async function pushHaptics(): Promise<void> {
       { id: 'off', label: 'Off', sub: !settings.hapticsEnabled ? 'Selected' : undefined, onSelect: () => apply(false) },
     ],
     initialIndex: settings.hapticsEnabled ? 0 : 1,
+  });
+}
+
+/** Case finishes, persisted in the settings table and applied live. */
+async function pushCaseColor(): Promise<void> {
+  const settings = await loadSettings();
+  const items: Row[] = CHASSIS_COLOR_ORDER.map((key) => {
+    const palette = chassisPalettes[key];
+    return {
+      id: `case-${key}`,
+      label: palette.label,
+      sub: settings.caseColor === key ? 'Selected' : undefined,
+      onSelect: () => {
+        fireAndForget(
+          (async () => {
+            await setCaseColor(key);
+            const next = await loadSettings();
+            useLibraryStore.getState().setSettings(next);
+            useMenuStore.getState().pop();
+            useMenuStore.getState().setStatus(`Case: ${palette.label}`);
+          })(),
+        );
+      },
+    };
+  });
+
+  useMenuStore.getState().push({
+    id: 'case-color',
+    title: 'Case Color',
+    kind: 'settings',
+    items,
+    initialIndex: Math.max(0, CHASSIS_COLOR_ORDER.indexOf(settings.caseColor)),
   });
 }
 
@@ -597,7 +643,22 @@ async function shuffleSongs(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export function buildRootItems(): Row[] {
-  return [
+  const rows: Row[] = [];
+
+  // Restored from a previous session: surface it at the top of the main menu,
+  // like a real iPod, so Play can resume and the screen can be reopened.
+  const current = usePlayerStore.getState().current;
+  if (current) {
+    rows.push({
+      id: 'now-playing',
+      label: 'Now Playing',
+      sub: current.title,
+      chevron: true,
+      onSelect: () => pushNowPlaying(current),
+    });
+  }
+
+  rows.push(
     { id: 'music', label: 'Music', chevron: true, onSelect: pushMusic },
     {
       id: 'shuffle',
@@ -614,7 +675,9 @@ export function buildRootItems(): Row[] {
         fireAndForget(pushAbout());
       },
     },
-  ];
+  );
+
+  return rows;
 }
 
 /**
@@ -649,6 +712,36 @@ export function offerFirstRun(): void {
       },
     ],
   });
+}
+
+/**
+ * Rebuilds the root rows in place. Used after a session restore, because the
+ * "Now Playing" row only exists once a track is loaded.
+ */
+export function refreshRootMenu(): void {
+  if (useMenuStore.getState().stack.length === 0) return;
+  useMenuStore.getState().replaceRootItems(buildRootItems());
+}
+
+/**
+ * Cold-boot resume. Restores the last track paused at its saved position and
+ * never starts audio; togglePlay() loads and seeks on the first press.
+ */
+export async function resumeLastSession(): Promise<void> {
+  if (usePlayerStore.getState().current) return;
+
+  try {
+    const { trackId, positionMs } = await loadPlaybackSession();
+    if (!trackId) return;
+
+    const [track] = await getTracksByIds([trackId]);
+    if (!track) return;
+
+    usePlayerStore.getState().restoreSession(track, positionMs);
+    refreshRootMenu();
+  } catch (e) {
+    console.error('[nav] session resume failed', e);
+  }
 }
 
 /** Installs the main menu as the root frame. */

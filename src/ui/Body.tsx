@@ -19,13 +19,13 @@ import { useCallback, useEffect, useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 
-import { initMenus, offerFirstRun } from '../nav/menus';
+import { initMenus, offerFirstRun, resumeLastSession } from '../nav/menus';
 import { useWheelNav } from '../nav/wheelNav';
 import { useLibraryStore } from '../library/store';
 import { setHapticsEnabled } from '../haptics/haptics';
 import { DebugOverlay } from './DebugOverlay';
 import { Screen } from './Screen';
-import { colors, layout, radii, spacing, wheel as wheelCfg } from './theme';
+import { chassisPalettes, colors, layout, radii, spacing, wheel as wheelCfg } from './theme';
 import { ClickWheel } from '../wheel/ClickWheel';
 import { useClickWheel } from '../wheel/useClickWheel';
 
@@ -74,6 +74,10 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
       const { counts } = useLibraryStore.getState();
       if (counts.tracks === 0) {
         offerFirstRun();
+      } else {
+        // Cold-boot resume: preload the last track paused at its saved
+        // position so Now Playing is on the Main Menu and Play resumes.
+        await resumeLastSession();
       }
     })();
   }, []);
@@ -110,8 +114,17 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
     onMenuLongPress,
   });
 
+  // Case finish. Subscribed through `settings`, so changing it in Settings
+  // tints the chassis and the Select button without a relaunch.
+  const chassis = chassisPalettes[settings?.caseColor ?? 'silver'];
+
   return (
-    <View style={[styles.chassis, { width: availableWidth, height: availableHeight }]}>
+    <View
+      style={[
+        styles.chassis,
+        { width: availableWidth, height: availableHeight, backgroundColor: chassis.chassis },
+      ]}
+    >
       <View style={styles.stack}>
         {/* Equals 1 equal-height segment above the screen. */}
         <View style={styles.pusher} />
@@ -128,7 +141,11 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
 
         <GestureDetector gesture={gesture}>
           <View collapsable={false}>
-            <ClickWheel size={wheelSize} innerRatio={layout.wheelInnerRatio} />
+            <ClickWheel
+              size={wheelSize}
+              innerRatio={layout.wheelInnerRatio}
+              center={{ light: chassis.centerLight, dark: chassis.centerDark }}
+            />
           </View>
         </GestureDetector>
         <View style={styles.pusher} />

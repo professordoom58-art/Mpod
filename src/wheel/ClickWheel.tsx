@@ -38,7 +38,14 @@ type Props = {
   innerRatio?: number;
   /** Draws the four labels. */
   showLabels?: boolean;
+  /**
+   * Case tint for the concave Select button: `light` is the lit rim, `dark`
+   * the recessed middle. Defaults to the silver finish.
+   */
+  center?: { light: string; dark: string };
 };
+
+const DEFAULT_CENTER = { light: '#ECEFF3', dark: '#DCE1E7' } as const;
 
 /** Crisp label ink, per the iPod Classic wheel. */
 const LABEL_COLOR = '#858D99';
@@ -82,7 +89,12 @@ function PlayPauseGlyph({ cx, cy, color, labelSize }: { cx: number; cy: number; 
   );
 }
 
-export function ClickWheel({ size, innerRatio = layout.wheelInnerRatio, showLabels = true }: Props) {
+export function ClickWheel({
+  size,
+  innerRatio = layout.wheelInnerRatio,
+  showLabels = true,
+  center = DEFAULT_CENTER,
+}: Props) {
   const c = size / 2;
   const inner = c * innerRatio;
   const labelR = (inner + c) / 2;
@@ -101,9 +113,9 @@ export function ClickWheel({ size, innerRatio = layout.wheelInnerRatio, showLabe
 
           {/* Concave Select button: darker in the middle, lit at the rim. */}
           <RadialGradient id="selectConcave" cx="50%" cy="50%" r="62%">
-            <Stop offset="0" stopColor="#DCE1E7" />
-            <Stop offset="0.62" stopColor="#E6EAEF" />
-            <Stop offset="1" stopColor="#ECEFF3" />
+            <Stop offset="0" stopColor={center.dark} />
+            <Stop offset="0.62" stopColor={center.light} />
+            <Stop offset="1" stopColor={center.light} />
           </RadialGradient>
 
           {/* Rim shadow: the recess where the wheel meets the chassis. */}

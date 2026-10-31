@@ -70,6 +70,184 @@ export type LcdPalette = (typeof lcdPalettes)[LcdPaletteName];
 
 export const DEFAULT_LCD_PALETTE: LcdPaletteName = 'color';
 
+// ---------------------------------------------------------------------------
+// App theme model (Feature 3). A single AppThemeConfig drives the shell, the
+// click wheel and the screen UI, and can be layered with per-field overrides
+// so Settings can "tinker" without defining a whole palette.
+// ---------------------------------------------------------------------------
+
+export type AppThemeConfig = {
+  id: string;
+  label: string;
+  /** Chassis finish: the phone viewport behind the screen and wheel. */
+  shellColor: string;
+  /** Click-wheel face color. */
+  wheelColor: string;
+  /** Wheel label/glyph ink. */
+  wheelTextColor: string;
+  /** Screen background gradient, [top, bottom]. Drives Now Playing. */
+  screenBgGradient: readonly [string, string];
+  /** Selection pill, progress fill and other highlights. */
+  accentColor: string;
+};
+
+/** The subset of a theme the user can override (identity stays fixed). */
+export type ThemeOverrides = Partial<
+  Pick<
+    AppThemeConfig,
+    'shellColor' | 'wheelColor' | 'wheelTextColor' | 'screenBgGradient' | 'accentColor'
+  >
+>;
+
+export const themePresets = {
+  'classic-silver': {
+    id: 'classic-silver',
+    label: 'Classic Silver',
+    shellColor: '#E8ECF2',
+    wheelColor: '#FFFFFF',
+    wheelTextColor: '#7A828E',
+    screenBgGradient: ['#5A5652', '#383532'] as const,
+    accentColor: '#2971E7',
+  },
+  'u2-black-red': {
+    id: 'u2-black-red',
+    label: 'U2 Black/Red',
+    shellColor: '#141416',
+    wheelColor: '#C8102E',
+    wheelTextColor: '#FFFFFF',
+    screenBgGradient: ['#1C1C1E', '#000000'] as const,
+    accentColor: '#E0301E',
+  },
+  'space-gray': {
+    id: 'space-gray',
+    label: 'Space Gray',
+    shellColor: '#4A4E54',
+    wheelColor: '#3A3E44',
+    wheelTextColor: '#C8CDD4',
+    screenBgGradient: ['#3A3A3C', '#1C1C1E'] as const,
+    accentColor: '#0A84FF',
+  },
+  'midnight-blue': {
+    id: 'midnight-blue',
+    label: 'Midnight Blue',
+    shellColor: '#16233F',
+    wheelColor: '#22355C',
+    wheelTextColor: '#A9C1E8',
+    screenBgGradient: ['#1B2440', '#0C1326'] as const,
+    accentColor: '#4F93F7',
+  },
+} satisfies Record<string, AppThemeConfig>;
+
+export type ThemeId = keyof typeof themePresets;
+
+export const THEME_ORDER: ThemeId[] = [
+  'classic-silver',
+  'u2-black-red',
+  'space-gray',
+  'midnight-blue',
+];
+
+export const DEFAULT_THEME_ID: ThemeId = 'classic-silver';
+
+export function isThemeId(value: string | null | undefined): value is ThemeId {
+  return value !== null && value !== undefined && value in themePresets;
+}
+
+/**
+ * Resolves a preset id plus optional overrides into a concrete config. An
+ * unknown id (stale persisted value) falls back to the default preset.
+ */
+export function resolveAppTheme(
+  themeId: string | null | undefined,
+  overrides?: ThemeOverrides | null,
+): AppThemeConfig {
+  const base = themePresets[isThemeId(themeId) ? themeId : DEFAULT_THEME_ID];
+  return {
+    id: base.id,
+    label: overrides ? `${base.label} (custom)` : base.label,
+    shellColor: overrides?.shellColor ?? base.shellColor,
+    wheelColor: overrides?.wheelColor ?? base.wheelColor,
+    wheelTextColor: overrides?.wheelTextColor ?? base.wheelTextColor,
+    screenBgGradient: overrides?.screenBgGradient ?? base.screenBgGradient,
+    accentColor: overrides?.accentColor ?? base.accentColor,
+  };
+}
+
+// --- theme fields + swatches (for Settings > Themes > Custom) ---------------
+
+export type ThemeField =
+  | 'shellColor'
+  | 'wheelColor'
+  | 'wheelTextColor'
+  | 'screenBgGradient'
+  | 'accentColor';
+
+export const THEME_FIELDS: { key: ThemeField; label: string }[] = [
+  { key: 'shellColor', label: 'Shell Color' },
+  { key: 'wheelColor', label: 'Wheel Color' },
+  { key: 'wheelTextColor', label: 'Wheel Text' },
+  { key: 'screenBgGradient', label: 'Screen Background' },
+  { key: 'accentColor', label: 'Accent Color' },
+];
+
+export type ColorSwatch = { label: string; value: string };
+
+/** Shared color choices for the flat color fields. */
+export const COLOR_SWATCHES: ColorSwatch[] = [
+  { label: 'White', value: '#FFFFFF' },
+  { label: 'Silver', value: '#E8ECF2' },
+  { label: 'Graphite', value: '#4A4E54' },
+  { label: 'Black', value: '#141416' },
+  { label: 'Red', value: '#C8102E' },
+  { label: 'Blue', value: '#2971E7' },
+  { label: 'Sky', value: '#4F93F7' },
+  { label: 'Green', value: '#2FA84F' },
+];
+
+export type GradientSwatch = { label: string; value: readonly [string, string] };
+
+/** Named [top, bottom] gradients for the screen background field. */
+export const GRADIENT_SWATCHES: GradientSwatch[] = [
+  { label: 'Warm Matte', value: ['#5A5652', '#383532'] },
+  { label: 'Charcoal', value: ['#3A3A3C', '#1C1C1E'] },
+  { label: 'True Black', value: ['#1C1C1E', '#000000'] },
+  { label: 'Midnight', value: ['#1B2440', '#0C1326'] },
+  { label: 'Deep Blue', value: ['#22355C', '#101A30'] },
+  { label: 'Crimson', value: ['#5A1A1A', '#260808'] },
+];
+
+// --- tiny pure color helpers -----------------------------------------------
+
+function expandHex(hex: string): string {
+  const h = hex.replace('#', '');
+  return h.length === 3 ? `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}` : `#${h}`;
+}
+
+function channel(hex: string, i: number): number {
+  return parseInt(expandHex(hex).slice(1 + i * 2, 3 + i * 2), 16);
+}
+
+/** Linear blend: t=0 -> a, t=1 -> b. Inputs are #rrggbb (or #rgb). */
+export function mixHex(a: string, b: string, t: number): string {
+  const k = Math.max(0, Math.min(1, t));
+  const out = [0, 1, 2].map((i) => {
+    const av = channel(a, i);
+    const bv = channel(b, i);
+    return Math.max(0, Math.min(255, Math.round(av + (bv - av) * k)))
+      .toString(16)
+      .padStart(2, '0');
+  });
+  return `#${out.join('')}`;
+}
+
+export function lightenHex(hex: string, t: number): string {
+  return mixHex(hex, '#FFFFFF', t);
+}
+
+export function darkenHex(hex: string, t: number): string {
+  return mixHex(hex, '#000000', t);
+}
+
 export const colors = {
   /** The whole phone viewport acts as the iPod face. */
   pageBackground: '#E8ECF2',
@@ -145,6 +323,12 @@ export const timing = {
   debugFlushMs: 80,
   /** How long "Loading..." shows before the loader resolves into rows. */
   loaderMinVisibleMs: 120,
+  /** Alphabet jump HUD stays up this long after the last accelerated step. */
+  jumpHudMs: 600,
+  /** Marquee pause before each scroll pass. */
+  marqueePauseMs: 1200,
+  /** Pixels per second for the marquee scroll. */
+  marqueeSpeed: 26,
 } as const;
 
 export type Theme = {

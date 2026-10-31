@@ -10,6 +10,7 @@ import {
   setSetting,
   setSettingBool,
 } from './db';
+import { isChassisColor, type ChassisColor } from '../ui/theme';
 
 export const SETTING_KEYS = {
   wheelTickDeg: 'wheel.tickDeg',
@@ -19,12 +20,16 @@ export const SETTING_KEYS = {
   lastScanMs: 'scan.lastScanMs',
   lastScanFailed: 'scan.lastScanFailed',
   lastScanFallback: 'scan.lastScanFallback',
+  caseColor: 'ui.caseColor',
+  lastTrackId: 'player.lastTrackId',
+  lastPositionMs: 'player.lastPositionMs',
 } as const;
 
 export const DEFAULTS = {
   wheelTickDeg: 15,
   hapticsEnabled: true,
   minTrackLengthMs: 30000,
+  caseColor: 'silver' as ChassisColor,
 } as const;
 
 export const WHEEL_TICK_MIN = 10;
@@ -41,6 +46,7 @@ export type Settings = {
   lastScanMs: number;
   lastScanFailed: number;
   lastScanFallback: number;
+  caseColor: ChassisColor;
 };
 
 export async function loadSettings(): Promise<Settings> {
@@ -52,6 +58,7 @@ export async function loadSettings(): Promise<Settings> {
     lastScanMs,
     lastScanFailed,
     lastScanFallback,
+    caseColorRaw,
   ] = await Promise.all([
     getSettingNumber(SETTING_KEYS.wheelTickDeg, DEFAULTS.wheelTickDeg),
     getSettingBool(SETTING_KEYS.hapticsEnabled, DEFAULTS.hapticsEnabled),
@@ -60,6 +67,7 @@ export async function loadSettings(): Promise<Settings> {
     getSettingNumber(SETTING_KEYS.lastScanMs, 0),
     getSettingNumber(SETTING_KEYS.lastScanFailed, 0),
     getSettingNumber(SETTING_KEYS.lastScanFallback, 0),
+    getSetting(SETTING_KEYS.caseColor),
   ]);
 
   return {
@@ -70,6 +78,7 @@ export async function loadSettings(): Promise<Settings> {
     lastScanMs,
     lastScanFailed,
     lastScanFallback,
+    caseColor: isChassisColor(caseColorRaw) ? caseColorRaw : DEFAULTS.caseColor,
   };
 }
 
@@ -111,4 +120,33 @@ export async function readMinTrackLengthMs(): Promise<number> {
 
 export async function readRaw(key: string): Promise<string | null> {
   return getSetting(key);
+}
+
+export async function setCaseColor(value: ChassisColor): Promise<void> {
+  await setSetting(SETTING_KEYS.caseColor, value);
+}
+
+/**
+ * Session resume. Written on pause and ~every 5s while playing, read once at
+ * boot. Kept here so the player never touches the DB directly.
+ */
+export async function savePlaybackSession(
+  trackId: string | null,
+  positionMs: number,
+): Promise<void> {
+  await Promise.all([
+    setSetting(SETTING_KEYS.lastTrackId, trackId ?? ''),
+    setSetting(SETTING_KEYS.lastPositionMs, String(Math.max(0, Math.round(positionMs)))),
+  ]);
+}
+
+export async function loadPlaybackSession(): Promise<{
+  trackId: string | null;
+  positionMs: number;
+}> {
+  const [trackId, positionMs] = await Promise.all([
+    getSetting(SETTING_KEYS.lastTrackId),
+    getSettingNumber(SETTING_KEYS.lastPositionMs, 0),
+  ]);
+  return { trackId: trackId && trackId.length > 0 ? trackId : null, positionMs };
 }

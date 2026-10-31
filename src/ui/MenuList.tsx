@@ -14,8 +14,14 @@ import { memo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
-import type { Row } from '../nav/menuStack';
+import { selectJumpLetter, useMenuStore, type Row } from '../nav/menuStack';
+import { MarqueeText } from './MarqueeText';
 import { fonts, spacing, type LcdPalette } from './theme';
+
+/** Labels longer than this scroll instead of being truncated. */
+const MARQUEE_CHARS = 26;
+/** The A-Z jump HUD is a fixed square. */
+const JUMP_HUD_SIZE = 44;
 
 /** The iPod Classic selection blue, top to bottom. */
 const PILL_TOP = '#4F93F7';
@@ -77,17 +83,28 @@ const RowView = memo(function RowView({ row, selected, rowHeight, width, palette
       {selected ? <SelectionPill width={width} height={rowHeight} /> : null}
 
       <View style={styles.rowTextWrap}>
-        <Text
-          numberOfLines={1}
-          ellipsizeMode="tail"
-          style={[
-            styles.rowText,
-            { color: row.disabled ? dimColor : textColor },
-            row.disabled ? styles.rowTextDisabled : null,
-          ]}
-        >
-          {row.label}
-        </Text>
+        {selected && row.label.length > MARQUEE_CHARS ? (
+          <MarqueeText
+            text={row.label}
+            style={[
+              styles.rowText,
+              { color: row.disabled ? dimColor : textColor },
+              row.disabled ? styles.rowTextDisabled : null,
+            ]}
+          />
+        ) : (
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={[
+              styles.rowText,
+              { color: row.disabled ? dimColor : textColor },
+              row.disabled ? styles.rowTextDisabled : null,
+            ]}
+          >
+            {row.label}
+          </Text>
+        )}
         {row.sub ? (
           <Text
             numberOfLines={1}
@@ -116,6 +133,10 @@ export function MenuList({
   palette,
   loading,
 }: Props) {
+  // Accelerated-scroll HUD. Subscribed here rather than in Screen so the
+  // letter changes re-render the list only, never the header or the wheel.
+  const jumpLetter = useMenuStore(selectJumpLetter);
+
   const rowHeight = spacing.lcdRowHeight;
   const total = items.length;
 
@@ -155,6 +176,25 @@ export function MenuList({
           />
         );
       })}
+
+      {/* Alphabet jump HUD, centred over the list while spinning fast. */}
+      {jumpLetter ? (
+        <View
+          style={[
+            styles.jumpHud,
+            {
+              width: JUMP_HUD_SIZE,
+              height: JUMP_HUD_SIZE,
+              borderRadius: 8,
+              top: Math.max(0, (height - JUMP_HUD_SIZE) / 2),
+              left: Math.max(0, (width - JUMP_HUD_SIZE) / 2),
+            },
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={styles.jumpLetter}>{jumpLetter}</Text>
+        </View>
+      ) : null}
 
       {showScrollbar ? (
         <View
@@ -225,5 +265,16 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     borderRadius: spacing.scrollbarWidth / 2,
+  },
+  jumpHud: {
+    position: 'absolute',
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  jumpLetter: {
+    color: '#FFFFFF',
+    fontSize: 26,
+    fontWeight: '700',
   },
 });

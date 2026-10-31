@@ -20,6 +20,7 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Defs, G, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 
 import { colors, spacing } from './theme';
+import { MarqueeText } from './MarqueeText';
 import { resolveArtworkUri } from '../library/resolveUri';
 import { usePlayerStore } from '../player/store';
 
@@ -213,9 +214,12 @@ export function NowPlaying({ width, height }: Props) {
 
       {/* Metadata panel */}
       <View style={[styles.meta, { height: META_HEIGHT }]}>
-        <Text numberOfLines={1} style={styles.title}>
-          {current?.title ?? 'No track'}
-        </Text>
+        <MarqueeText
+          text={current?.title ?? 'No track'}
+          style={styles.title}
+          align="center"
+          height={19}
+        />
         <Text numberOfLines={1} style={styles.artist}>
           {current?.artist ?? ''}
         </Text>

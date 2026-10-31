@@ -10,6 +10,7 @@
 import { create } from 'zustand';
 
 import { computeWindow } from '../ui/windowing';
+import { timing } from '../ui/theme';
 
 export type FrameKind =
   | 'menu'
@@ -59,15 +60,28 @@ export type PushFrameInput = {
 
 type MenuState = {
   stack: Frame[];
+  /** Letter shown by the accelerated-scroll HUD, or null when hidden. */
+  jumpLetter: string | null;
   push: (input: PushFrameInput) => void;
   pop: () => boolean;
   popToRoot: () => boolean;
   moveSelection: (dir: 1 | -1) => MoveResult;
+  /**
+   * Moves by `steps` rows in one state update. Used by wheel acceleration so a
+   * 8x tick does not re-render the list eight times.
+   */
+  moveSelectionBy: (dir: 1 | -1, steps: number) => MoveResult;
   setVisibleRows: (rows: number) => void;
   setStatus: (status: string | undefined) => void;
   replaceTopItems: (items: Row[]) => void;
+  /** Replaces the bottom (root) frame's rows without disturbing depth. */
+  replaceRootItems: (items: Row[]) => void;
+  showJump: (letter: string) => void;
+  hideJump: () => void;
   reset: (root: PushFrameInput) => void;
 };
+
+let jumpTimer: ReturnType<typeof setTimeout> | null = null;
 
 const ROOT_ID = 'root';
 
@@ -115,6 +129,26 @@ function withWindow(frame: Frame, selectedIndex: number): Frame {
 
 export const useMenuStore = create<MenuState>((set, get) => ({
   stack: [],
+  jumpLetter: null,
+
+  showJump: (letter) => {
+    if (jumpTimer) clearTimeout(jumpTimer);
+    // Only touch subscribers when the letter actually changes, so an 8x spin
+    // through one letter does not re-render the HUD every tick.
+    if (get().jumpLetter !== letter) set({ jumpLetter: letter });
+    jumpTimer = setTimeout(() => {
+      jumpTimer = null;
+      set({ jumpLetter: null });
+    }, timing.jumpHudMs);
+  },
+
+  hideJump: () => {
+    if (jumpTimer) {
+      clearTimeout(jumpTimer);
+      jumpTimer = null;
+    }
+    if (get().jumpLetter !== null) set({ jumpLetter: null });
+  },
 
   reset: (root) => {
     set({ stack: [makeFrame({ ...root, id: root.id || ROOT_ID })] });
@@ -181,17 +215,21 @@ export const useMenuStore = create<MenuState>((set, get) => ({
     return true;
   },
 
-  moveSelection: (dir) => {
+  moveSelection: (dir) => get().moveSelectionBy(dir, 1),
+
+  moveSelectionBy: (dir, steps) => {
     const { stack } = get();
     if (stack.length === 0) return 'bounced';
 
     const top = stack[stack.length - 1];
     if (top.loading || top.items.length === 0) return 'bounced';
 
-    const next = top.selectedIndex + dir;
-    if (next < 0 || next > top.items.length - 1) {
-      return 'bounced';
-    }
+    const count = Math.max(1, Math.trunc(steps));
+    const next = Math.min(
+      Math.max(top.selectedIndex + dir * count, 0),
+      top.items.length - 1,
+    );
+    if (next === top.selectedIndex) return 'bounced';
 
     const updated = withWindow(top, next);
     set({ stack: [...stack.slice(0, -1), updated] });
@@ -218,6 +256,25 @@ export const useMenuStore = create<MenuState>((set, get) => ({
     const top = stack[stack.length - 1];
     if (top.status === status) return;
     set({ stack: [...stack.slice(0, -1), { ...top, status }] });
+  },
+
+  replaceRootItems: (items) => {
+    const { stack } = get();
+    if (stack.length === 0) return;
+    const root = stack[0];
+    const selectedIndex = Math.min(root.selectedIndex, Math.max(0, items.length - 1));
+    set({
+      stack: [
+        {
+          ...root,
+          items,
+          loading: false,
+          selectedIndex,
+          windowStart: computeWindow(selectedIndex, 0, root.visibleRows, items.length),
+        },
+        ...stack.slice(1),
+      ],
+    });
   },
 
   replaceTopItems: (items) => {
@@ -259,6 +316,7 @@ export const selectTopStatus = (s: MenuState): string | undefined =>
   s.stack.length > 0 ? s.stack[s.stack.length - 1].status : undefined;
 export const selectTopKind = (s: MenuState): FrameKind =>
   s.stack.length > 0 ? s.stack[s.stack.length - 1].kind : 'menu';
+export const selectJumpLetter = (s: MenuState): string | null => s.jumpLetter;
 
 const EMPTY_ROWS: Row[] = [];
 
