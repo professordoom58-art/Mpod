@@ -52,3 +52,12 @@ yarn-error.*
 
 # tests
 coverage/
+
+# local scratch / device-pulled databases
+# tmpdb/ holds an ipod.db pulled off the phone during debugging. It is real
+# user data and must never be committed.
+tmpdb/
+
+# IDE
+.idea/
+.vscode/

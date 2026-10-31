@@ -87,21 +87,25 @@ export async function pickAndImport(
 
   for (let i = 0; i < result.assets.length; i += 1) {
     const asset = result.assets[i];
+    const source = new File(asset.uri);
+    let partFile: File | null = null;
+
     try {
       const name = uniqueName(dir, asset.name || `import-${Date.now()}.mp3`);
-      const source = new File(asset.uri);
       const destination = new File(dir, name);
+      // Stage the copy under a .part name so a kill mid-copy can never leave a
+      // half-written file that listFiles() would index as a real track.
+      partFile = new File(dir, `${name}.part`);
 
       // copy() is async in the new File API; copySync() exists too but this
       // keeps the JS thread free during a multi-file import.
-      await source.copy(destination);
+      await source.copy(partFile);
 
-      // The cache copy is ours; delete it so imports do not double disk use.
-      try {
-        if (source.exists) source.delete();
-      } catch {
-        /* cache is disposable either way */
-      }
+      // Promote the staged file to its final name. move() is async and
+      // overwrites nothing, because uniqueName() already guaranteed `name`
+      // was free.
+      await partFile.move(destination);
+      partFile = null;
 
       const relPath = `${MUSIC_DIR}/${name}`;
       const sizeBytes = destination.exists ? destination.size : asset.size;
@@ -116,6 +120,22 @@ export async function pickAndImport(
       });
     } catch {
       /* one failed copy must not abort the rest of the import */
+    } finally {
+      // Never leave a partial file behind, whatever happened above.
+      if (partFile) {
+        try {
+          if (partFile.exists) partFile.delete();
+        } catch {
+          /* already gone */
+        }
+      }
+      // The cache copy is ours; delete it even when the copy failed so a
+      // failed import does not accumulate cache garbage.
+      try {
+        if (source.exists) source.delete();
+      } catch {
+        /* cache is disposable either way */
+      }
     }
 
     onProgress?.({ done: i + 1, total });
@@ -146,6 +166,8 @@ export const importedFiles: LibraryProvider = {
 
     for (const entry of entries) {
       if (!(entry instanceof File)) continue;
+      // Skip staging files: a .part is a copy that never finished, not a track.
+      if (entry.name.endsWith('.part')) continue;
       if (!hasAudioExtension(entry.name)) continue;
 
       try {

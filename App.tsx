@@ -6,18 +6,27 @@
  */
 
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Body } from './src/ui/Body';
 import { colors } from './src/ui/theme';
+import { pushNowPlaying } from './src/nav/menus';
+import { setNowPlayingHandler } from './src/player/store';
 
 const SHOW_DEBUG = false;
 
 function AppInner() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
+
+  // The player store pushes Now Playing frames through this handler.
+  useEffect(() => {
+    setNowPlayingHandler(pushNowPlaying);
+    return () => setNowPlayingHandler(null);
+  }, []);
 
   const availableWidth = Math.max(0, width - insets.left - insets.right);
   const availableHeight = Math.max(0, height - insets.top - insets.bottom);

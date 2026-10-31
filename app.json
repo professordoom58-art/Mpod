@@ -10,6 +10,12 @@
     "plugins": [
       "expo-dev-client",
       [
+        "expo-audio",
+        {
+          "recordAudioAndroid": false
+        }
+      ],
+      [
         "expo-media-library",
         {
           "granularPermissions": ["audio"],

@@ -15,8 +15,23 @@ import { getSelectedRow, useMenuStore } from '../nav/menuStack';
 import { usePlayerStore } from '../player/store';
 import type { Zone } from '../wheel/useClickWheel';
 
+/** One wheel step changes volume by this fraction (0.0..1.0). */
+const VOLUME_STEP = 0.05;
+
 export function useWheelNav() {
   const onStep = useCallback((dir: 1 | -1) => {
+    // On the Now Playing screen the wheel controls volume (Phase 4) instead of
+    // moving a menu selection.
+    const kind = useMenuStore.getState().stack.slice(-1)[0]?.kind;
+    const player = usePlayerStore.getState();
+
+    if (kind === 'nowplaying' && player.current) {
+      const next = Math.min(1, Math.max(0, player.volume + dir * VOLUME_STEP));
+      player.setVolume(next);
+      tick();
+      return;
+    }
+
     const result = useMenuStore.getState().moveSelection(dir);
     if (result === 'moved') {
       tick();

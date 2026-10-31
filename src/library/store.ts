@@ -92,9 +92,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     set({ scanning: true, error: null, progress: { phase: 'listing', done: 0, total: 0 } });
 
     try {
-      const permission = get().permission ?? undefined;
+      // Resolve permission from the provider before syncing. The prune guard
+      // in syncLibrary only deletes when permission is 'granted', so passing a
+      // stale/undefined value here silently disabled pruning and deleted
+      // tracks never left the index.
+      let permission = get().permission;
+      if (permission !== 'granted') {
+        permission = await provider.ensurePermission();
+        set({ permission });
+      }
+
       const result = await syncLibrary(provider, (p) => set({ progress: p }), {
-        permission,
+        permission: permission ?? undefined,
       });
       await recordScan({
         ms: result.ms,

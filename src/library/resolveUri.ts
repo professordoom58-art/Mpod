@@ -58,10 +58,17 @@ export async function writeBase64File(relPath: string, base64: string): Promise<
   return relPath;
 }
 
-/** True when the file behind a document-relative path still exists. */
+/**
+ * True when the file behind a document-relative path exists AND has content.
+ *
+ * A zero-byte file is treated as absent: an interrupted artwork write (or a
+ * copy killed mid-flight) leaves an empty file, and returning true for it made
+ * readArtwork skip re-extraction forever, so the album showed no art.
+ */
 export function relativeFileExists(relPath: string): boolean {
   try {
-    return new File(Paths.document, relPath).exists;
+    const file = new File(Paths.document, relPath);
+    return file.exists && (file.size ?? 0) > 0;
   } catch {
     return false;
   }

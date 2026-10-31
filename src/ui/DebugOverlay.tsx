@@ -1,10 +1,15 @@
 /**
- * Debug overlay for Phase 1: shows the live wheel angle, the accumulator, the
- * total step count and the last tapped zone.
+ * Debug overlay: shows the live wheel angle, the accumulator, and the total
+ * step count.
  *
  * angle/acc/steps live on the UI thread. useAnimatedReaction watches them and
  * pushes a snapshot to JS, gated by a timestamp shared value so we update at
  * most once per flushMs instead of re-rendering at 60fps.
+ *
+ * The last tapped zone and last step direction used to be props, which forced
+ * Body to hold useState for them and re-render on every wheel step. They are
+ * gone: the overlay now reports only what it can read from shared values, so
+ * nothing above it needs to re-render to feed it.
  */
 
 import { useCallback, useState } from 'react';
@@ -17,20 +22,17 @@ import {
 } from 'react-native-reanimated';
 
 import { colors, fonts, spacing } from '../ui/theme';
-import type { Zone } from '../wheel/useClickWheel';
 
 type Props = {
   angleDeg: SharedValue<number>;
   accDeg: SharedValue<number>;
   steps: SharedValue<number>;
-  lastZone: Zone | null;
-  lastDir: 1 | -1 | null;
   flushMs: number;
 };
 
 type Snapshot = { angle: number; acc: number; steps: number };
 
-export function DebugOverlay({ angleDeg, accDeg, steps, lastZone, lastDir, flushMs }: Props) {
+export function DebugOverlay({ angleDeg, accDeg, steps, flushMs }: Props) {
   const [snap, setSnap] = useState<Snapshot>({ angle: 0, acc: 0, steps: 0 });
   const lastPush = useSharedValue(0);
 
@@ -54,10 +56,7 @@ export function DebugOverlay({ angleDeg, accDeg, steps, lastZone, lastDir, flush
       <Text style={styles.line}>
         angle {snap.angle.toFixed(1)}deg   acc {snap.acc.toFixed(1)}deg
       </Text>
-      <Text style={styles.line}>
-        steps {snap.steps}   zone {lastZone ?? '-'}   dir{' '}
-        {lastDir === null ? '-' : lastDir > 0 ? '+1' : '-1'}
-      </Text>
+      <Text style={styles.line}>steps {snap.steps}</Text>
     </View>
   );
 }

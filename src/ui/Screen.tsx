@@ -1,15 +1,26 @@
 /**
- * The LCD frame: a title bar (play indicator, centered title, battery icon)
- * and a body area that renders the current frame.
+ * The LCD frame: a brushed-metal title bar (play indicator, centered title,
+ * segmented battery) and a body area that renders the current frame.
  *
- * The title bar is styled per frame kind: a light silver header on regular
- * menus, or a dark charcoal header on the Now Playing screen. All navigation
- * logic lives in the menu store; this component only renders.
+ * PERFORMANCE CONTRACT:
+ *   - every hook is called unconditionally at the top of the component;
+ *   - `MenuList` is never instantiated for the now-playing frame, so the list
+ *     tree is not built and thrown away on every track change;
+ *   - the `playing` subscription lives inside <ScreenHeader />, so a play/pause
+ *     change re-renders the header only, never the list.
+ *
+ * All depth is drawn with react-native-svg gradients. No Platform branching.
  */
 
 import { useEffect, useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import Svg, { Path, Rect } from 'react-native-svg';
+import Svg, {
+  Defs,
+  LinearGradient,
+  Path,
+  Rect,
+  Stop,
+} from 'react-native-svg';
 
 import {
   selectTopItems,
@@ -21,42 +32,164 @@ import {
   selectTopWindowStart,
   useMenuStore,
 } from '../nav/menuStack';
+import { usePlayerStore } from '../player/store';
 import { MenuList } from './MenuList';
 import { NowPlaying } from './NowPlaying';
 import { ProgressView } from './ProgressView';
-import { colors, fonts, lcdPalettes, spacing, type LcdPalette } from './theme';
+import { fonts, lcdPalettes, spacing, type LcdPalette } from './theme';
 import { visibleRowCount } from './windowing';
 
 type Props = {
   width: number;
   height: number;
-  playing: boolean;
   paletteName?: keyof typeof lcdPalettes;
 };
 
-/** Battery glyph, drawn rather than imported so it scales with the LCD. */
-function BatteryIcon({ color }: { color: string }) {
-  const w = 16;
-  const h = 8;
+/** Brushed-metal header gradient and its hairline bottom edge. */
+const HEADER_FROM = '#F0F2F5';
+const HEADER_TO = '#D4D8E0';
+const HEADER_BORDER = '#A2A8B4';
+const HEADER_TEXT = '#2A2F38';
+
+/** Segmented battery: green gradient body, dark outline. */
+const BATTERY_FROM = '#3CD659';
+const BATTERY_TO = '#24A83E';
+const BATTERY_EDGE = '#3F4A3F';
+
+/** Glyph ink for the play/pause indicator. */
+const GLYPH_DARK = '#3A4048';
+const GLYPH_LIGHT = '#FFFFFF';
+
+/**
+ * Glossy play/pause glyph. A gradient fill plus a 1px light top edge reads as
+ * a raised plastic button rather than a flat icon.
+ */
+function PlayPauseGlyph({ playing }: { playing: boolean }) {
+  const w = 9;
+  const h = 10;
   return (
-    <Svg width={w + 2} height={h} viewBox={`0 0 ${w + 2} ${h}`}>
-      <Rect x={0.5} y={0.5} width={w - 1} height={h - 1} rx={1.5} stroke={color} strokeWidth={1} fill="none" />
-      <Rect x={w} y={h / 2 - 2} width={2} height={4} rx={0.5} fill={color} />
-      <Rect x={2} y={2} width={10} height={h - 4} rx={0.5} fill={color} />
+    <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      <Defs>
+        <LinearGradient id="glyphFill" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={GLYPH_DARK} />
+          <Stop offset="1" stopColor="#12161C" />
+        </LinearGradient>
+      </Defs>
+      {playing ? (
+        <>
+          <Rect x={0.5} y={0.5} width={2.6} height={9} rx={0.8} fill="url(#glyphFill)" />
+          <Rect x={5.4} y={0.5} width={2.6} height={9} rx={0.8} fill="url(#glyphFill)" />
+          <Rect x={0.5} y={0.5} width={2.6} height={1} rx={0.5} fill={GLYPH_LIGHT} opacity={0.55} />
+          <Rect x={5.4} y={0.5} width={2.6} height={1} rx={0.5} fill={GLYPH_LIGHT} opacity={0.55} />
+        </>
+      ) : (
+        <>
+          <Path d="M1 0.6 L8.4 5 L1 9.4 Z" fill="url(#glyphFill)" />
+          <Path d="M1 0.6 L8.4 5 L1 3.2 Z" fill={GLYPH_LIGHT} opacity={0.35} />
+        </>
+      )}
     </Svg>
   );
 }
 
-/** Small play triangle shown while audio is running. */
-function PlayIndicator({ color }: { color: string }) {
+/**
+ * 3D segmented battery. Four cells fill progressively; the whole body carries
+ * a vertical green gradient and a 1px outline so it reads as a physical gauge.
+ */
+function BatteryIcon({ level }: { level: number }) {
+  const bodyW = 18;
+  const bodyH = 9;
+  const cells = 4;
+  const gap = 1;
+  const inset = 1.5;
+  const cellW = (bodyW - inset * 2 - gap * (cells - 1)) / cells;
+  const filled = Math.round(Math.min(1, Math.max(0, level)) * cells);
+
   return (
-    <Svg width={8} height={9} viewBox="0 0 8 9">
-      <Path d="M0 0 L8 4.5 L0 9 Z" fill={color} />
+    <Svg width={bodyW + 3} height={bodyH} viewBox={`0 0 ${bodyW + 3} ${bodyH}`}>
+      <Defs>
+        <LinearGradient id="batteryFill" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={BATTERY_FROM} />
+          <Stop offset="1" stopColor={BATTERY_TO} />
+        </LinearGradient>
+      </Defs>
+
+      {/* Shell */}
+      <Rect
+        x={0.5}
+        y={0.5}
+        width={bodyW - 1}
+        height={bodyH - 1}
+        rx={2}
+        stroke={BATTERY_EDGE}
+        strokeWidth={1}
+        fill="none"
+      />
+      {/* Terminal nub */}
+      <Rect x={bodyW} y={bodyH / 2 - 2} width={2} height={4} rx={0.8} fill={BATTERY_EDGE} />
+
+      {/* Cells */}
+      {Array.from({ length: cells }).map((_, i) => {
+        const x = inset + i * (cellW + gap);
+        const on = i < filled;
+        return (
+          <Rect
+            key={i}
+            x={x}
+            y={inset}
+            width={cellW}
+            height={bodyH - inset * 2}
+            rx={0.6}
+            fill={on ? 'url(#batteryFill)' : '#C9CDD4'}
+          />
+        );
+      })}
     </Svg>
   );
 }
 
-export function Screen({ width, height, playing, paletteName = 'color' }: Props) {
+/**
+ * The brushed-metal title bar. Subscribes to `playing` itself so the play
+ * indicator can change without re-rendering the list below it.
+ */
+function ScreenHeader({ title }: { title: string }) {
+  const playing = usePlayerStore((s) => s.playing);
+
+  return (
+    <View style={[styles.titleBar, { height: spacing.titleBarHeight }]}>
+      {/* Metallic gradient + hairline bottom edge, drawn behind the content. */}
+      <Svg
+        style={StyleSheet.absoluteFill}
+        width="100%"
+        height="100%"
+        preserveAspectRatio="none"
+        viewBox="0 0 100 100"
+      >
+        <Defs>
+          <LinearGradient id="headerMetal" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={HEADER_FROM} />
+            <Stop offset="1" stopColor={HEADER_TO} />
+          </LinearGradient>
+        </Defs>
+        <Rect x="0" y="0" width="100" height="100" fill="url(#headerMetal)" />
+        {/* 1px bottom border, expressed in the 0..100 viewBox. */}
+        <Rect x="0" y="99" width="100" height="1" fill={HEADER_BORDER} />
+      </Svg>
+
+      <View style={styles.titleLeft}>{playing ? <PlayPauseGlyph playing /> : null}</View>
+
+      <Text numberOfLines={1} ellipsizeMode="tail" style={styles.titleText}>
+        {title}
+      </Text>
+
+      <View style={styles.titleRight}>
+        <BatteryIcon level={0.8} />
+      </View>
+    </View>
+  );
+}
+
+export function Screen({ width, height, paletteName = 'color' }: Props) {
   const palette: LcdPalette = lcdPalettes[paletteName];
 
   const title = useMenuStore(selectTopTitle);
@@ -80,20 +213,10 @@ export function Screen({ width, height, playing, paletteName = 'color' }: Props)
     setVisibleRows(rows);
   }, [rows, setVisibleRows]);
 
-  // The Now Playing screen owns its own dark header, artwork and metadata, so
-  // it renders as a single full-body frame without the shared title bar.
-  if (kind === 'nowplaying') {
-    return (
-      <NowPlaying width={width} height={height} playing={playing} />
-    );
-  }
-
-  // Regular menus get the light silver header; Now Playing owns its own dark one.
-  const headerBg = colors.headerBg;
-  const headerText = colors.headerText;
-  const headerBorder = colors.headerBorder;
-
-  const content = useMemo(() => {
+  // Built only for frames that actually show a list. For now-playing this is
+  // null, so the list tree is never constructed.
+  const listContent = useMemo(() => {
+    if (kind === 'nowplaying') return null;
     if (kind === 'progress') {
       return <ProgressView width={width} height={bodyHeight} status={status} palette={palette} />;
     }
@@ -122,32 +245,16 @@ export function Screen({ width, height, playing, paletteName = 'color' }: Props)
     status,
   ]);
 
+  // Now Playing owns the full body: its own dark header, artwork and metadata.
+  if (kind === 'nowplaying') {
+    return <NowPlaying width={width} height={height} />;
+  }
+
   return (
     <View style={[styles.lcd, { width, height, backgroundColor: palette.background }]}>
-      <View
-        style={[
-          styles.titleBar,
-          { height: spacing.titleBarHeight, backgroundColor: headerBg, borderBottomColor: headerBorder },
-        ]}
-      >
-        <View style={styles.titleLeft}>
-          {playing ? <PlayIndicator color={headerText} /> : null}
-        </View>
+      <ScreenHeader title={title} />
 
-        <Text
-          numberOfLines={1}
-          ellipsizeMode="tail"
-          style={[styles.titleText, { color: headerText }]}
-        >
-          {title}
-        </Text>
-
-        <View style={styles.titleRight}>
-          <BatteryIcon color={headerText} />
-        </View>
-      </View>
-
-      {content}
+      {listContent}
 
       {status ? (
         <View style={[styles.statusLine, { height: spacing.statusLineHeight }]}>
@@ -156,6 +263,35 @@ export function Screen({ width, height, playing, paletteName = 'color' }: Props)
           </Text>
         </View>
       ) : null}
+
+      {/*
+        Acrylic bezel bevels, drawn last so they sit above the content:
+          - a 1px top/left highlight (the lit edge of a recessed pane),
+          - a subtle diagonal gloss sweep across the upper-left.
+        Pointer-transparent so they never eat a tap.
+      */}
+      <View style={styles.bevel} pointerEvents="none">
+        <Svg
+          style={StyleSheet.absoluteFill}
+          width="100%"
+          height="100%"
+          preserveAspectRatio="none"
+          viewBox="0 0 100 100"
+        >
+          <Defs>
+            <LinearGradient id="bevelGloss" x1="0" y1="0" x2="1" y2="1">
+              <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.34} />
+              <Stop offset="0.45" stopColor="#FFFFFF" stopOpacity={0.08} />
+              <Stop offset="1" stopColor="#FFFFFF" stopOpacity={0} />
+            </LinearGradient>
+          </Defs>
+          {/* Diagonal gloss sweep. */}
+          <Path d="M0 0 H100 L0 62 Z" fill="url(#bevelGloss)" />
+          {/* 1px top and left highlight. */}
+          <Rect x="0" y="0" width="100" height="0.6" fill="#FFFFFF" opacity={0.7} />
+          <Rect x="0" y="0" width="0.6" height="100" fill="#FFFFFF" opacity={0.45} />
+        </Svg>
+      </View>
     </View>
   );
 }
@@ -163,27 +299,31 @@ export function Screen({ width, height, playing, paletteName = 'color' }: Props)
 const styles = StyleSheet.create({
   lcd: {
     overflow: 'hidden',
-    borderRadius: 10,
+    // 4px inner screen radius: the acrylic pane sits inside the black bezel.
+    borderRadius: 4,
   },
   titleBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing.lcdPaddingH,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
   },
   titleLeft: {
     width: 22,
     alignItems: 'flex-start',
+    justifyContent: 'center',
   },
   titleRight: {
     width: 22,
     alignItems: 'flex-end',
+    justifyContent: 'center',
   },
   titleText: {
     flex: 1,
     textAlign: 'center',
     fontSize: fonts.lcdTitleSize,
     fontWeight: '700',
+    color: HEADER_TEXT,
   },
   statusLine: {
     justifyContent: 'center',
@@ -191,5 +331,14 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: fonts.lcdSmallSize,
+  },
+  bevel: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 4,
+    overflow: 'hidden',
   },
 });

@@ -38,7 +38,7 @@ A music player app with an **iPod-classic user interface**: a drawn iPod body, a
 
 Versions below were **reported by the Phase 2–3 agent from `package.json`/`node_modules` (re-verify)**:
 
-expo ~58.0.21 · react-native 0.88.1 · react-native-reanimated ^4.7.1 (needs `react-native-worklets` and its Babel plugin) · react-native-gesture-handler · react-native-svg · react-native-safe-area-context · expo-sqlite ~58.0.14 · expo-media-library ~58.0.13 · expo-document-picker ~58.0.4 · expo-file-system ~58.0.13 · expo-haptics ~58.0.7 · expo-dev-client · expo-audio (Phase 4) · zustand ^5.0.16 · @missingcore/react-native-metadata-retriever 3.2.1 (**Android-only**) · TypeScript strict.
+expo ~58.0.21 · react-native 0.88.1 · react-native-reanimated ^4.7.1 (needs `react-native-worklets` and its Babel plugin) · react-native-gesture-handler · react-native-svg · react-native-safe-area-context · expo-sqlite ~58.0.14 · expo-media-library ~58.0.13 · expo-document-picker ~58.0.4 · expo-file-system ~58.0.13 · expo-haptics ~58.0.7 · expo-dev-client · expo-audio 58.0.10 (Phase 4: implemented, API verified against installed .d.ts) · zustand ^5.0.16 · @missingcore/react-native-metadata-retriever 3.2.1 (**Android-only**) · TypeScript strict.
 
 SDK 58 API changes the previous agent found and built around (**UNVERIFIED at runtime**):
 - `expo-media-library`: legacy `getAssetsAsync` is deprecated and throws. Use the new `Query` API: `new Query().eq(AssetField.MEDIA_TYPE, MediaType.AUDIO).orderBy(...).limit(500).offset(n).exeForMetadata()`. Permission: `requestPermissionsAsync(false, ['audio'])`, mapped to `granted | denied | blocked`.
@@ -56,7 +56,7 @@ src/
   library/      types.ts, sortKey.ts, fnv.ts, db.ts, resolveUri.ts, metadata.ts,
                 androidMediaStore.ts (ONLY library file with Platform branching, plus the guarded import in metadata.ts),
                 importedFiles.ts, indexer.ts, store.ts, providers.ts, devSeed.ts (__DEV__ only)
-  player/       engine.ts (interface), store.ts (currently STUBS), expo-audio impl in Phase 4
+  player/       engine.ts (interface), store.ts (real, backed by engine), expoAudio.ts (the only expo-audio import), playback.ts (queue bridge)
   ui/           Screen.tsx, MenuList.tsx, ProgressView.tsx, NowPlaying.tsx, windowing.ts, theme.ts
   nav/          menuStack.ts        // custom zustand stack, NOT react-navigation
 scripts/check-pure.ts               // pure-function checks, run with tsx
@@ -104,16 +104,27 @@ Rules:
 - Empty-library, permission-denied ("Allow access") and permission-blocked ("Open Settings" → `Linking.openSettings()`) states are explicit rows. First launch never auto-scans silently.
 - `player/store.ts` currently exposes **stubs** with stable signatures: `requestPlay(queue, startIndex)`, `togglePlay()`, `next()`, `prev()`; they console-log and push a text-only Now Playing frame. Phase 4 replaces the internals, not the signatures.
 
-### Planned player contract (Phase 4)
+### Player contract (Phase 4 — implemented in `src/player/engine.ts`)
 ```ts
+export type PlayerStatus = {
+  positionMs: number;   // ms
+  durationMs: number;   // ms, 0 until known
+  playing: boolean;
+  index: number;        // within the materialised queue
+  didJustFinish: boolean; // one-shot advance signal
+};
+
 export interface PlayerEngine {
   load(queue: Track[], startIndex: number): Promise<void>;
   play(): void; pause(): void; next(): void; prev(): void;
-  seek(ms: number): void; setVolume(v: number): void;
-  onStatus(cb: (s: { positionMs: number; playing: boolean; index: number }) => void): () => void;
+  togglePlay(): void;
+  seek(ms: number): void;
+  setVolume(v: number): void; // 0..1
+  onStatus(cb: (s: PlayerStatus) => void): () => void;
+  dispose(): void;
 }
 ```
-Now Playing: artwork, title/artist/album, progress and volume bars. Wheel rotation = volume by default; Select toggles scrub mode. Click sound pre-loaded in a separate player so it never interrupts music.
+Now Playing: artwork, title/artist/album, progress and volume bars. Wheel rotation = volume by default on the Now Playing frame; Next/Prev/Play zones still work there. Scrub mode and the separate click-sound player are Phase 5.
 
 ## 7. Status
 
@@ -124,12 +135,14 @@ Now Playing: artwork, title/artist/album, progress and volume bars. Wheel rotati
 | 3. Library layer, MediaStore + imported providers, indexer, sqlite | Implemented (static checks only) |
 | 3.1 Hardening (see §8) | **Pending** |
 | CI/GitHub Actions + repo hygiene (see §9) | **Pending**; a draft `.github/workflows/build-apk.yml` exists, untracked, never run |
-| 4. Audio engine, queue, Now Playing | **Not started** |
+| 4. Audio engine, queue, Now Playing | **Implemented (static checks only)**; JS bundle OK; **needs native rebuild** to link expo-audio |
 | 5. Click sound, settings polish, transitions | Not started |
 | 6. Background playback + lock-screen controls | Not started |
 | 7. iPhone port | Not started |
 
 Static verification reported by the Phase 2–3 agent: `tsc --noEmit` exit 0; `expo export --platform android` bundled; `scripts/check-pure.ts` 35/35 (sortKey, parseFilename, fnv, computeWindow, visibleRowCount); `expo config --type prebuild` resolves permissions `READ_MEDIA_AUDIO` + `READ_EXTERNAL_STORAGE` and plugins. **None of this proves runtime behavior.** The first `npx expo run:android` was blocked by `adb`/SDK env vars not set and then by the slow first Gradle build; no on-device result exists yet.
+
+Phase 4 (this session) static verification: `tsc --noEmit --noUnusedLocals --noUnusedParameters` exit 0; `expo export --platform android` bundled (1357 modules); `expo config --type prebuild` now resolves the `expo-audio` plugin (`recordAudioAndroid: false` → `MODIFY_AUDIO_SETTINGS` + `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, iOS `UIBackgroundModes: ["audio"]`, and the `AudioControlsService` MediaSessionService on prebuild). All expo-audio calls were checked against the installed `node_modules/expo-audio@58.0.10/build/*.d.ts`, not from memory. **Still no on-device audio proof**: the installed dev client was built (16:44) before expo-audio entered `node_modules` (17:27), so it does NOT contain the `ExpoAudio` native module — the next `expo run:android`/prebuild+gradlew must run before any playback works.
 
 ## 8. Known risks and pending hardening (Phase 3.1)
 
@@ -141,7 +154,11 @@ Static verification reported by the Phase 2–3 agent: `tsc --noEmit` exit 0; `e
 6. **Prune guard:** require permission granted in addition to the empty-listing rule.
 7. **Dependency drift:** versions are hand-pinned because `expo install` is blocked; commit `package-lock.json`, pin exact versions, run `npx expo-doctor` if it works.
 8. **Metadata retriever on a real device** is a third-party native module over an unstable AndroidX API. If the app crashes at scan start: `adb logcat | Select-String "metadataretriever"`.
-9. Playback of MediaStore `content://` URIs through `expo-audio` must be verified on-device before Phase 4 is considered done (ExoPlayer supports `content://`, but SDK 58 behavior is unverified).
+9. Playback of MediaStore `content://` URIs through `expo-audio` must be verified on-device before Phase 4 is considered done (ExoPlayer supports `content://`, but SDK 58 behavior is unverified). The engine wraps `replace()`/`play()`/`seekTo()` in try/catch so a bad uri degrades to a logged error + paused state instead of crashing.
+10. **The installed dev client predates expo-audio.** `android/` was generated at 16:44 and expo-audio landed at 17:27; the generated autolinking list has no `ExpoAudio` module. **A native rebuild (`expo run:android` or prebuild + gradlew) is required before any playback**, and the `expo-audio` config plugin (added to `app.json` this session) must be applied by that prebuild. Rule 8 applies: ask before running the build.
+11. **Queue is windowed, not full.** `requestPlayByIds` materialises a 200-track window starting at the selection (fixed this session so any `startIndex` plays the right track); Now Playing shows `n/200` and the queue wraps within the window. Streaming the full 20k queue is a later refinement.
+12. **`interruptionMode` is `doNotMix`** (exclusive audio focus; also required for Phase 6 lock-screen controls). If the owner prefers ducking, change `configureAudioMode()` in `src/player/expoAudio.ts`.
+13. **Volume is not persisted** across launches (resets to 1.0). Intended for Phase 5 settings polish, not implemented this session.
 
 ## 9. Build, CI and distribution plan
 
@@ -156,7 +173,7 @@ Static verification reported by the Phase 2–3 agent: `tsc --noEmit` exit 0; `e
 - Release keystore: create one now (`keytool -genkeypair -v -storetype PKCS12 ... -alias ipod`), **back it up outside the repo**. Never commit keystores or print secrets.
 - Identity (**CONFIRM**): proposed `android.package` / `ios.bundleIdentifier` = `com.mihirx.ipodplayer`. Choose before the first installed build; changing it later makes the OS treat it as a different app. `ios.infoPlist.UIBackgroundModes: ["audio"]` is needed for background playback.
 
-## 10. Test protocol (run on a real phone before Phase 4)
+## 10. Test protocol (run on a real phone; Phase 4 on-device audio checks are the current priority)
 
 1. Build and boot; persisted settings load without crash.
 2. Seed 5,000 fake tracks (dev seed): fast wheel spins across the list, no dropped ticks, bounce haptic at both ends, selection preserved after back.
@@ -173,7 +190,7 @@ On any failure, capture the full logcat/Metro/Gradle output (for Gradle, the fir
 
 - Bundle id / package name (CONFIRM).
 - iOS tag-reading strategy (spike pending).
-- `expo-audio` vs `react-native-track-player` for background playback, lock-screen controls, gapless queueing (decide in Phase 4/6 after the `content://` test).
+- Background playback/lock-screen engine: keep `expo-audio` (`setActiveForLockScreen`, already wired in the plugin) vs switching to `react-native-track-player`; decide in Phase 6 after the `content://` test.
 - Figma assets and font: the original iPod UI used Chicago/Helvetica-style fonts; check licensing before bundling. Export the wheel/body as SVG; wheel hit areas stay computed from geometry, not SVG paths.
 - Whether to downscale artwork (needs a dependency such as `expo-image-manipulator`; ask first).
 

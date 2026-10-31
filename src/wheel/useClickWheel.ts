@@ -5,11 +5,23 @@
  * angle accumulation with wrap to (-PI, PI], one step per tickDeg, clockwise
  * = +1, worklets on the UI thread, only onStep/onTap crossing to JS.
  *
- * The only additions are read-only debug shared values (dbg*) so the overlay
- * can display angle / accumulator / step count. They are written alongside the
- * existing assignments and never influence control flow.
+ * Three things were added on top of the reference behaviour:
+ *
+ * 1. Gestures are built ONCE (useMemo) and never rebuilt on render. Callbacks
+ *    are held in shared values so a re-render cannot recreate the gesture
+ *    objects, which used to drop an in-flight pan mid-spin.
+ * 2. Ring-slip guard: if the finger leaves the ring and comes back, the angle
+ *    is re-seeded instead of being accumulated across the gap. Without this a
+ *    finger sliding over the center button produced one huge phantom jump.
+ * 3. Tap dead zones: 10 degrees either side of each sector boundary resolves
+ *    to no zone, so a tap near a boundary does nothing instead of firing the
+ *    wrong button.
+ *
+ * The debug shared values (dbg*) are read-only for the overlay and never
+ * influence control flow.
  */
 
+import { useCallback, useMemo, useRef } from 'react';
 import { Gesture } from 'react-native-gesture-handler';
 import { runOnJS, useSharedValue, type SharedValue } from 'react-native-reanimated';
 
@@ -34,6 +46,28 @@ const wrap = (d: number) => {
 
 const RAD_TO_DEG = 180 / Math.PI;
 
+/** Half-width of the dead zone around each sector boundary, in degrees. */
+const DEAD_ZONE_DEG = 10;
+
+/**
+ * Resolves an angle in degrees to a tap zone, or null inside a dead zone.
+ *
+ * Boundaries sit at -135, -45, 45 and 135 degrees. A tap within DEAD_ZONE_DEG
+ * of any boundary returns null so the caller does nothing.
+ */
+function zoneForAngle(a: number): Zone | null {
+  'worklet';
+  const boundaries = [-135, -45, 45, 135];
+  for (let i = 0; i < boundaries.length; i += 1) {
+    if (Math.abs(a - boundaries[i]) <= DEAD_ZONE_DEG) return null;
+  }
+
+  if (a > -135 && a <= -45) return 'menu';
+  if (a > -45 && a <= 45) return 'next';
+  if (a > 45 && a <= 135) return 'play';
+  return 'prev';
+}
+
 export function useClickWheel({
   size,
   innerRatio = 0.36,
@@ -49,70 +83,107 @@ export function useClickWheel({
   const last = useSharedValue(0);
   const acc = useSharedValue(0);
   const valid = useSharedValue(false);
+  /** True while the finger is inside the ring annulus. */
+  const wasInRing = useSharedValue(false);
 
   // Debug instrumentation (read-only for the overlay).
   const dbgAngleDeg = useSharedValue(0);
   const dbgAccDeg = useSharedValue(0);
   const dbgSteps = useSharedValue(0);
 
-  const pan = Gesture.Pan()
-    .minDistance(4)
-    .onBegin((e) => {
-      const r = Math.hypot(e.x - c, e.y - c);
-      valid.value = r > inner && r < c;
-      last.value = Math.atan2(e.y - c, e.x - c);
-      acc.value = 0;
-      dbgAngleDeg.value = last.value * RAD_TO_DEG;
-      dbgAccDeg.value = 0;
-    })
-    .onUpdate((e) => {
-      if (!valid.value) return;
-      const th = Math.atan2(e.y - c, e.x - c);
-      acc.value += wrap(th - last.value);
-      last.value = th;
-      dbgAngleDeg.value = th * RAD_TO_DEG;
-      while (acc.value >= tick) {
-        acc.value -= tick;
-        dbgSteps.value += 1;
-        runOnJS(onStep)(1);
-      }
-      while (acc.value <= -tick) {
-        acc.value += tick;
-        dbgSteps.value += 1;
-        runOnJS(onStep)(-1);
-      }
-      dbgAccDeg.value = acc.value * RAD_TO_DEG;
-    });
+  // Callbacks live in refs so the gesture objects below can be built once.
+  // Reanimated's useSharedValue cannot hold a function type, so the worklets
+  // call the stable trampolines below instead, and those read the refs on the
+  // JS thread. This keeps onStep/onTap out of the gesture dependencies.
+  const stepRef = useRef(onStep);
+  const tapRef = useRef(onTap);
+  const longPressRef = useRef(onMenuLongPress);
 
-  const tap = Gesture.Tap()
-    .maxDistance(8)
-    .onEnd((e, ok) => {
-      if (!ok) return;
-      const dx = e.x - c;
-      const dy = e.y - c;
-      const r = Math.hypot(dx, dy);
-      if (r > c) return;
-      if (r <= inner) {
-        runOnJS(onTap)('select');
-        return;
-      }
-      const a = (Math.atan2(dy, dx) * 180) / Math.PI;
-      const zone: Zone =
-        a > -135 && a <= -45
-          ? 'menu'
-          : a > -45 && a <= 45
-            ? 'next'
-            : a > 45 && a <= 135
-              ? 'play'
-              : 'prev';
-      runOnJS(onTap)(zone);
-    });
+  stepRef.current = onStep;
+  tapRef.current = onTap;
+  longPressRef.current = onMenuLongPress;
 
-  const debug: ClickWheelDebugValues = { angleDeg: dbgAngleDeg, accDeg: dbgAccDeg, steps: dbgSteps };
+  const invokeStep = useCallback((dir: 1 | -1) => {
+    stepRef.current(dir);
+  }, []);
 
-  // Long-press is only offered when a handler is supplied, so the default
-  // behaviour (a plain Menu tap) is untouched.
-  if (onMenuLongPress) {
+  const invokeTap = useCallback((zone: Zone) => {
+    tapRef.current(zone);
+  }, []);
+
+  const invokeLongPress = useCallback(() => {
+    longPressRef.current?.();
+  }, []);
+
+  const gesture = useMemo(() => {
+    const pan = Gesture.Pan()
+      .minDistance(4)
+      .onBegin((e) => {
+        const r = Math.hypot(e.x - c, e.y - c);
+        const inRing = r > inner && r < c;
+        valid.value = inRing;
+        wasInRing.value = inRing;
+        last.value = Math.atan2(e.y - c, e.x - c);
+        acc.value = 0;
+        dbgAngleDeg.value = last.value * RAD_TO_DEG;
+        dbgAccDeg.value = 0;
+      })
+      .onUpdate((e) => {
+        if (!valid.value) return;
+
+        const r = Math.hypot(e.x - c, e.y - c);
+        const inRing = r > inner && r < c;
+
+        // Ring-slip guard: the finger left the annulus (over the center button
+        // or off the wheel) and has now come back. Re-seed the reference angle
+        // and add nothing, so the gap contributes no rotation.
+        if (!inRing) {
+          wasInRing.value = false;
+          return;
+        }
+        if (!wasInRing.value) {
+          wasInRing.value = true;
+          last.value = Math.atan2(e.y - c, e.x - c);
+          dbgAngleDeg.value = last.value * RAD_TO_DEG;
+          return;
+        }
+
+        const th = Math.atan2(e.y - c, e.x - c);
+        acc.value += wrap(th - last.value);
+        last.value = th;
+        dbgAngleDeg.value = th * RAD_TO_DEG;
+        while (acc.value >= tick) {
+          acc.value -= tick;
+          dbgSteps.value += 1;
+          runOnJS(invokeStep)(1);
+        }
+        while (acc.value <= -tick) {
+          acc.value += tick;
+          dbgSteps.value += 1;
+          runOnJS(invokeStep)(-1);
+        }
+        dbgAccDeg.value = acc.value * RAD_TO_DEG;
+      });
+
+    const tap = Gesture.Tap()
+      .maxDistance(8)
+      .onEnd((e, ok) => {
+        if (!ok) return;
+        const dx = e.x - c;
+        const dy = e.y - c;
+        const r = Math.hypot(dx, dy);
+        if (r > c) return;
+        if (r <= inner) {
+          runOnJS(invokeTap)('select');
+          return;
+        }
+        const a = (Math.atan2(dy, dx) * 180) / Math.PI;
+        const zone = zoneForAngle(a);
+        // null means the tap landed in a dead zone: deliberately no action.
+        if (zone === null) return;
+        runOnJS(invokeTap)(zone);
+      });
+
     const longPressMenu = Gesture.LongPress()
       .minDuration(600)
       .maxDistance(8)
@@ -122,16 +193,23 @@ export function useClickWheel({
         const r = Math.hypot(dx, dy);
         if (r > c || r <= inner) return;
         const a = (Math.atan2(dy, dx) * 180) / Math.PI;
+        // Menu sector, ignoring the dead zone: a long press is deliberate.
         const isMenu = a > -135 && a <= -45;
-        if (isMenu) runOnJS(onMenuLongPress)();
+        if (isMenu) runOnJS(invokeLongPress)();
       });
 
-    // LongPress must win over Tap when it fires, so it is raced first and the
-    // tap is raced after it.
-    return { gesture: Gesture.Race(longPressMenu, pan, tap), debug };
-  }
+    // LongPress must win over Tap when it fires, so it is raced first.
+    return Gesture.Race(longPressMenu, pan, tap);
+    // Only geometry changes rebuild the gesture; the callbacks are stable
+    // trampolines that read refs, so they are safe dependencies.
+  }, [c, inner, tick, invokeStep, invokeTap, invokeLongPress]);
 
-  return { gesture: Gesture.Race(pan, tap), debug };
+  const debug: ClickWheelDebugValues = useMemo(
+    () => ({ angleDeg: dbgAngleDeg, accDeg: dbgAccDeg, steps: dbgSteps }),
+    [dbgAngleDeg, dbgAccDeg, dbgSteps],
+  );
+
+  return { gesture, debug };
 }
 
 /**

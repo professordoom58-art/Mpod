@@ -15,15 +15,40 @@ import { shuffleIds, usePlayerStore } from './store';
  */
 export const MAX_MATERIALISED_QUEUE = 200;
 
-/** Plays a queue given ids, starting at startIndex. */
+/**
+ * Plays a queue given ids, starting at startIndex.
+ *
+ * Only a bounded window around the selection is materialised (a 20k-track
+ * library must not build 20k Track objects).
+ *
+ * The window is CENTERED on startIndex rather than starting at it, so the
+ * selected track lands in the middle of the queue and prev() has real history
+ * to walk back into. Starting the window at the selection made the selected
+ * track queue index 0, so prev() wrapped straight to the END of the window and
+ * played the wrong song.
+ *
+ * The window is a contiguous slice of the id list, clamped so it never runs
+ * past either end; the selected track is placed at its own offset inside it.
+ */
 export async function requestPlayByIds(ids: string[], startIndex: number): Promise<void> {
   if (ids.length === 0) return;
 
-  const window = ids.slice(0, MAX_MATERIALISED_QUEUE);
+  const total = ids.length;
+  const start = Math.min(Math.max(startIndex, 0), Math.max(0, total - 1));
+
+  // How many tracks to take before the selection. Half the window, but never
+  // more than exist before `start`.
+  const before = Math.min(Math.floor(MAX_MATERIALISED_QUEUE / 2), start);
+  const windowStart = start - before;
+  const windowEnd = Math.min(total, windowStart + MAX_MATERIALISED_QUEUE);
+
+  const window = ids.slice(windowStart, windowEnd);
   const tracks = await getTracksByIds(window);
   if (tracks.length === 0) return;
 
-  const index = Math.min(Math.max(startIndex, 0), tracks.length - 1);
+  // The selection's position inside the materialised window.
+  const index = start - windowStart;
+
   usePlayerStore.getState().requestPlay(tracks, index);
 }
 

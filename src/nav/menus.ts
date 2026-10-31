@@ -30,7 +30,6 @@ import { useLibraryStore } from '../library/store';
 import type { Track } from '../library/types';
 import { setHapticsEnabled } from '../haptics/haptics';
 import {
-  playTrackById,
   requestPlayByIds,
   shuffleAndPlay,
 } from '../player/playback';
@@ -510,16 +509,10 @@ function pushSongs(): void {
     loader: async () => {
       const tracks = await getTracks();
       if (tracks.length === 0) return [emptyLibraryRow()];
-      // The queue for a song picked from the full list is that song alone;
-      // expanding to the whole library is Phase 4's job.
-      return tracks.map((t) => ({
-        id: t.id,
-        label: t.title,
-        sub: t.artist,
-        onSelect: () => {
-          void playTrackById(t.id);
-        },
-      }));
+      // Picking a song queues the whole list from that point, like the real
+      // device, instead of a one-track queue.
+      const ids = tracks.map((t) => t.id);
+      return trackRows(tracks, ids);
     },
   });
 }

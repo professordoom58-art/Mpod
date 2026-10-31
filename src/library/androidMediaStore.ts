@@ -86,6 +86,10 @@ export const androidMediaStore: LibraryProvider = {
     // offset window that shifted mid-scan) collapse to one entry.
     const seen = new Set<string>();
     let offset = 0;
+    // Consecutive pages that contained no id we had not already seen. A single
+    // such page can happen legitimately when the store shifts mid-scan; three
+    // in a row means offset no longer maps to a moving window and we stop.
+    let stallPages = 0;
 
     // Paged loop: MediaStore can hold tens of thousands of rows, and pulling
     // them all in one call is what makes first scans feel like a freeze.
@@ -118,15 +122,26 @@ export const androidMediaStore: LibraryProvider = {
           id: `ms:${meta.id}`,
           uri,
           filename: meta.filename ?? 'Unknown',
-          modifiedAt: meta.modificationTime != null ? Math.round(meta.modificationTime * 1000) : 0,
+          // modificationTime is ALREADY milliseconds since epoch. Multiplying
+          // by 1000 here made every timestamp ~1000x too large, which broke
+          // the indexer's modifiedAt comparison and forced a full re-read of
+          // every file on every scan.
+          modifiedAt:
+            meta.modificationTime != null ? Math.round(meta.modificationTime) : 0,
           durationMs: durationMs > 0 ? durationMs : undefined,
         });
       }
 
       // A page made entirely of ids we already saw means the underlying
       // MediaStore changed during the scan and offset no longer maps to a
-      // stable window. Stop instead of looping on the same rows forever.
-      if (newIds === 0) break;
+      // stable window. Tolerate a one-off shift, but stop after three
+      // consecutive stalled pages instead of looping on the same rows.
+      if (newIds === 0) {
+        stallPages += 1;
+        if (stallPages >= 3) break;
+      } else {
+        stallPages = 0;
+      }
 
       if (page.length < PAGE_SIZE) break;
       offset += PAGE_SIZE;

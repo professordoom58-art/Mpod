@@ -25,7 +25,14 @@ jobs:
     timeout-minutes: 60
 
     outputs:
-      apk_name: ${{ steps.meta.outputs.apk_name }}
+      # The REAL uploaded filename, which differs between the two signing
+      # paths (release-signed vs -debugkey). The release job must use this
+      # rather than recomputing the name, or the fallback artifact never
+      # matches and the release fails on an unmatched file.
+      #
+      # Both signing steps write `apk_name`; only one of them runs, so the
+      # coalesce always resolves to the step that actually produced the file.
+      apk_name: ${{ steps.sign_release.outputs.apk_name || steps.sign_ephemeral.outputs.apk_name }}
 
     steps:
       - name: Checkout
@@ -80,6 +87,7 @@ jobs:
           SHA7=$(echo "$GITHUB_SHA" | cut -c1-7)
           echo "apk_base=ipod-player-${VERSION}-${SHA7}" >> "$GITHUB_OUTPUT"
           echo "apk_name=ipod-player-${VERSION}-${SHA7}.apk" >> "$GITHUB_OUTPUT"
+          echo "apk_name_debugkey=ipod-player-${VERSION}-${SHA7}-debugkey.apk" >> "$GITHUB_OUTPUT"
 
       # Secrets cannot be referenced from an `if:` expression, so probe them in
       # the shell and expose only a boolean. Values are never printed.
@@ -96,6 +104,7 @@ jobs:
           fi
 
       - name: Sign APK with release keystore
+        id: sign_release
         if: steps.signing.outputs.available == 'true'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -116,7 +125,23 @@ jobs:
           echo "Using apksigner from build-tools $BUILD_TOOLS"
 
           ALIAS="${KEY_ALIAS:-ipod}"
-          INPUT="android/app/build/outputs/apk/release/app-release.apk"
+
+          # Gradle's release output is `app-release-unsigned.apk` when no
+          # signingConfig is applied and `app-release.apk` when one is. Accept
+          # either instead of hard-coding one name.
+          INPUT=""
+          for candidate in \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            android/app/build/outputs/apk/release/app-release.apk; do
+            if [ -f "$candidate" ]; then INPUT="$candidate"; break; fi
+          done
+          if [ -z "$INPUT" ]; then
+            echo "::error::No release APK found under android/app/build/outputs/apk/release/"
+            ls -la android/app/build/outputs/apk/release/ || true
+            exit 1
+          fi
+          echo "Signing $INPUT"
+
           OUTPUT="$RUNNER_TEMP/${{ steps.meta.outputs.apk_name }}"
 
           "$APKSIGNER" sign \
@@ -130,16 +155,69 @@ jobs:
           "$APKSIGNER" verify --print-certs "$OUTPUT"
 
           echo "APK_PATH=$OUTPUT" >> "$GITHUB_ENV"
+          # Publish the ACTUAL filename so the release job attaches the right
+          # file on both the release-signed and the fallback path.
+          echo "apk_name=$(basename "$OUTPUT")" >> "$GITHUB_OUTPUT"
 
-      - name: Fall back to debug-key build
+      # No repository secrets: still produce an APK that INSTALLS. An unsigned
+      # release APK is rejected by the installer, so generate a throwaway
+      # keystore on the runner and sign with it. The key is ephemeral, so this
+      # build cannot upgrade a release-signed install and vice versa.
+      - name: Fall back to ephemeral-key signing
+        id: sign_ephemeral
         if: steps.signing.outputs.available != 'true'
         run: |
           set -euo pipefail
-          echo "::warning title=Debug-key APK::KEYSTORE_BASE64 / KEYSTORE_PASSWORD are not set. The APK is signed with the debug key, cannot be upgraded over a release-signed install, and must not be published as a real release."
-          INPUT="android/app/build/outputs/apk/release/app-release.apk"
+          echo "::warning title=Ephemeral-key APK::KEYSTORE_BASE64 / KEYSTORE_PASSWORD are not set. Signing with a throwaway keystore generated on this runner. The APK installs, but it cannot upgrade a release-signed install, and each run produces a different signing identity. Do not publish it as a real release."
+
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          BUILD_TOOLS=$(ls -1 "$SDK/build-tools" | sort -V | tail -n 1)
+          APKSIGNER="$SDK/build-tools/$BUILD_TOOLS/apksigner"
+          echo "Using apksigner from build-tools $BUILD_TOOLS"
+
+          INPUT=""
+          for candidate in \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            android/app/build/outputs/apk/release/app-release.apk; do
+            if [ -f "$candidate" ]; then INPUT="$candidate"; break; fi
+          done
+          if [ -z "$INPUT" ]; then
+            echo "::error::No release APK found under android/app/build/outputs/apk/release/"
+            ls -la android/app/build/outputs/apk/release/ || true
+            exit 1
+          fi
+          echo "Signing $INPUT"
+
+          KEYSTORE_FILE="$RUNNER_TEMP/ephemeral.keystore"
+          trap 'rm -f "$KEYSTORE_FILE"' EXIT
+
+          # Throwaway password: the key is deleted at the end of the job and is
+          # never used again, so it is not a secret worth protecting.
+          EPHEMERAL_PASS="ephemeral-$(date +%s)"
+
+          keytool -genkeypair -v \
+            -keystore "$KEYSTORE_FILE" \
+            -storetype PKCS12 \
+            -alias ipod \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$EPHEMERAL_PASS" \
+            -keypass "$EPHEMERAL_PASS" \
+            -dname "CN=Ephemeral Debug Key, OU=CI, O=ipod-player, L=NA, S=NA, C=US"
+
           OUTPUT="$RUNNER_TEMP/${{ steps.meta.outputs.apk_base }}-debugkey.apk"
-          cp "$INPUT" "$OUTPUT"
+
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE_FILE" \
+            --ks-key-alias ipod \
+            --ks-pass "pass:$EPHEMERAL_PASS" \
+            --key-pass "pass:$EPHEMERAL_PASS" \
+            --out "$OUTPUT" \
+            "$INPUT"
+
+          "$APKSIGNER" verify --print-certs "$OUTPUT"
+
           echo "APK_PATH=$OUTPUT" >> "$GITHUB_ENV"
+          echo "apk_name=$(basename "$OUTPUT")" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

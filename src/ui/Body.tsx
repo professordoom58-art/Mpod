@@ -4,24 +4,30 @@
  *   1. the LCD screen inside a thick black rounded bezel, and
  *   2. the click wheel below it.
  *
- * All wheel/gesture wiring, haptics and boot logic are unchanged; this file
- * only controls layout and rendering.
+ * PERFORMANCE CONTRACT: this component must never re-render on a wheel step or
+ * on a playback state change. That is why it holds no selection state, no
+ * last-zone state, and no player-store subscription. Everything that changes
+ * per step lives in the menu store (read by MenuList/Screen through selectors)
+ * and everything playback-related is subscribed to inside the header that
+ * actually displays it.
+ *
+ * The now-playing handler is installed once in App.tsx. Installing it here as
+ * well meant two subscribers racing to push the same frame.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 
-import { initMenus, offerFirstRun, pushNowPlaying } from '../nav/menus';
+import { initMenus, offerFirstRun } from '../nav/menus';
 import { useWheelNav } from '../nav/wheelNav';
-import { setNowPlayingHandler, usePlayerStore } from '../player/store';
 import { useLibraryStore } from '../library/store';
 import { setHapticsEnabled } from '../haptics/haptics';
 import { DebugOverlay } from './DebugOverlay';
 import { Screen } from './Screen';
 import { colors, layout, radii, spacing, wheel as wheelCfg } from './theme';
 import { ClickWheel } from '../wheel/ClickWheel';
-import { useClickWheel, type Zone } from '../wheel/useClickWheel';
+import { useClickWheel } from '../wheel/useClickWheel';
 
 type Props = {
   /** Available width from the parent (already inset-safe). */
@@ -32,9 +38,6 @@ type Props = {
 };
 
 export function Body({ availableWidth, availableHeight, showDebug }: Props) {
-  const [lastZone, setLastZone] = useState<Zone | null>(null);
-  const [lastDir, setLastDir] = useState<1 | -1 | null>(null);
-
   // Sizes, capped, and scaled down if the stack would overflow the height.
   const { screenWidth, screenHeight, wheelSize } = useMemo(() => {
     let sw = Math.min(availableWidth * layout.screenWidthRatio, layout.screenMaxWidth);
@@ -55,29 +58,24 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
 
   const { onStep, onTap, onMenuLongPress } = useWheelNav();
 
-  const playing = usePlayerStore((s) => s.playing);
+  // Only the persisted settings object is subscribed here, and it changes when
+  // the user edits a setting, never on a wheel step.
   const settings = useLibraryStore((s) => s.settings);
 
-  // Boot: open the DB, install the root menu, connect the player stub.
+  // Boot: open the DB and install the root menu.
   useEffect(() => {
     initMenus();
-    setNowPlayingHandler((track) => {
-      pushNowPlaying(track);
-    });
 
     void (async () => {
       await useLibraryStore.getState().init();
       // First launch with an empty index: offer the permission flow instead of
-      // scanning silently. Never auto-scan.
+      // scanning silently. offerFirstRun() decides whether this platform has a
+      // scannable device library, so no platform check is needed here.
       const { counts } = useLibraryStore.getState();
-      if (Platform.OS === 'android' && counts.tracks === 0) {
+      if (counts.tracks === 0) {
         offerFirstRun();
       }
     })();
-
-    return () => {
-      setNowPlayingHandler(null);
-    };
   }, []);
 
   // Apply persisted haptics preference to the haptics module once loaded.
@@ -87,17 +85,17 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
 
   const tickDeg = settings?.wheelTickDeg ?? wheelCfg.tickDeg;
 
+  // These wrappers exist only to keep the callback identity stable for the
+  // memoized gestures. They deliberately set no component state.
   const step = useCallback(
     (dir: 1 | -1) => {
-      setLastDir(dir);
       onStep(dir);
     },
     [onStep],
   );
 
   const tap = useCallback(
-    (zone: Zone) => {
-      setLastZone(zone);
+    (zone: Parameters<typeof onTap>[0]) => {
       onTap(zone);
     },
     [onTap],
@@ -113,14 +111,17 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
   });
 
   return (
-    <View
-      style={[styles.chassis, { width: availableWidth, height: availableHeight }]}
-    >
+    <View style={[styles.chassis, { width: availableWidth, height: availableHeight }]}>
       <View style={styles.stack}>
         {/* Equals 1 equal-height segment above the screen. */}
         <View style={styles.pusher} />
-        <View style={[styles.bezel, { width: screenWidth + spacing.bezelPadding * 2, borderRadius: radii.bezel }]}>
-          <Screen width={screenWidth} height={screenHeight} playing={playing} />
+        <View
+          style={[
+            styles.bezel,
+            { width: screenWidth + spacing.bezelPadding * 2, borderRadius: radii.bezel },
+          ]}
+        >
+          <Screen width={screenWidth} height={screenHeight} />
         </View>
 
         <View style={{ height: layout.screenWheelGap }} />
@@ -137,8 +138,6 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
             angleDeg={debug.angleDeg}
             accDeg={debug.accDeg}
             steps={debug.steps}
-            lastZone={lastZone}
-            lastDir={lastDir}
             flushMs={80}
           />
         ) : null}

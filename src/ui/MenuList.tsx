@@ -1,16 +1,29 @@
 /**
  * The LCD list. Renders ONLY the visible window slice: no FlatList, no
  * virtualization machinery, no per-row measurement. At 20,000 rows this is
- * ~9 Text nodes, which is why a fast wheel spin stays smooth.
+ * ~9 rows, which is why a fast wheel spin stays smooth.
  *
  * Each row is a fixed height so the window math is exact.
+ *
+ * The selected row is an authentic glossy iPod blue pill: a three-stop vertical
+ * gradient, a 1px light top edge and a 1px dark bottom edge, drawn with
+ * react-native-svg behind crisp white text. No Platform branching.
  */
 
 import { memo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import type { Row } from '../nav/menuStack';
 import { fonts, spacing, type LcdPalette } from './theme';
+
+/** The iPod Classic selection blue, top to bottom. */
+const PILL_TOP = '#4F93F7';
+const PILL_MID = '#2971E7';
+const PILL_BOTTOM = '#1455C0';
+const PILL_TOP_HIGHLIGHT = 'rgba(255,255,255,0.45)';
+const PILL_BOTTOM_EDGE = '#0D3A88';
+const PILL_TEXT = '#FFFFFF';
 
 type Props = {
   items: Row[];
@@ -31,18 +44,43 @@ type RowViewProps = {
   palette: LcdPalette;
 };
 
+/**
+ * The blue pill. Drawn as an absolutely-positioned SVG layer so the text above
+ * it stays a plain <Text> with no gradient clipping quirks.
+ */
+function SelectionPill() {
+  return (
+    <Svg
+      style={StyleSheet.absoluteFill}
+      width="100%"
+      height="100%"
+      preserveAspectRatio="none"
+      viewBox="0 0 100 100"
+    >
+      <Defs>
+        <LinearGradient id="pillBlue" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={PILL_TOP} />
+          <Stop offset="0.5" stopColor={PILL_MID} />
+          <Stop offset="1" stopColor={PILL_BOTTOM} />
+        </LinearGradient>
+      </Defs>
+      <Rect x="0" y="0" width="100" height="100" fill="url(#pillBlue)" />
+      {/* 1px top highlight: the lit edge of a convex pill. */}
+      <Rect x="0" y="0" width="100" height="1.6" fill={PILL_TOP_HIGHLIGHT} />
+      {/* 1px bottom edge: the shadowed underside. */}
+      <Rect x="0" y="98.4" width="100" height="1.6" fill={PILL_BOTTOM_EDGE} />
+    </Svg>
+  );
+}
+
 const RowView = memo(function RowView({ row, selected, rowHeight, palette }: RowViewProps) {
-  const textColor = selected ? palette.highlightText : palette.text;
-  const dimColor = selected ? palette.highlightText : palette.textDim;
+  const textColor = selected ? PILL_TEXT : palette.text;
+  const dimColor = selected ? PILL_TEXT : palette.textDim;
 
   return (
-    <View
-      style={[
-        styles.row,
-        { height: rowHeight },
-        selected ? { backgroundColor: palette.highlightBackground } : null,
-      ]}
-    >
+    <View style={[styles.row, { height: rowHeight }]}>
+      {selected ? <SelectionPill /> : null}
+
       <View style={styles.rowTextWrap}>
         <Text
           numberOfLines={1}
@@ -156,6 +194,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lcdPaddingH,
+    overflow: 'hidden',
   },
   rowTextWrap: {
     flexShrink: 1,

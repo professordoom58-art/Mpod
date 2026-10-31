@@ -10,6 +10,7 @@
  */
 
 import * as SQLite from 'expo-sqlite';
+import { Directory, File, Paths } from 'expo-file-system';
 
 import { fnvHex } from './fnv';
 import { sortKey } from './sortKey';
@@ -427,6 +428,25 @@ export async function countAlbums(): Promise<number> {
 export async function clearLibrary(): Promise<void> {
   const db = await getDb();
   await db.runAsync('DELETE FROM tracks');
+
+  // Drop the extracted artwork too. The rows are gone, so every file in
+  // artwork/ is now unreferenced; leaving them behind meant a reset library
+  // still occupied the document directory until the app was uninstalled.
+  // Best-effort: a failed cleanup must not fail the reset.
+  try {
+    const artworkDir = new Directory(Paths.document, 'artwork');
+    if (artworkDir.exists) {
+      for (const entry of artworkDir.list()) {
+        try {
+          if (entry instanceof File && entry.exists) entry.delete();
+        } catch {
+          /* one undeletable file must not block the rest */
+        }
+      }
+    }
+  } catch {
+    /* artwork directory missing or unreadable: nothing to clean */
+  }
 }
 
 // ---------------------------------------------------------------------------
