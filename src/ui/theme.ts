@@ -5,20 +5,30 @@
  */
 
 export const layout = {
-  /** Max screen width in points, so it does not overstretch on tablets. */
-  screenMaxWidth: 320,
-  /** Screen width as a ratio of the available phone width. */
-  screenWidthRatio: 0.84,
-  /** LCD aspect ratio (width / height). figPod screen is squarish, ~4:4.2. */
-  screenAspect: 4 / 4.2,
+  /**
+   * Max BEZEL width in points, so it does not overstretch on tablets. The LCD
+   * itself is this width minus the bezel border on both sides.
+   */
+  screenMaxWidth: 520,
+  /**
+   * Bezel width as a ratio of the available phone width. 0.93 leaves the
+   * 12-14 pt chassis margin on each side that the reference design has.
+   */
+  screenWidthRatio: 0.93,
+  /** LCD aspect ratio (width / height): a wide, squarish iPod pane. */
+  screenAspect: 1.15,
   /** Max wheel diameter in points. */
-  wheelMaxDiameter: 270,
+  wheelMaxDiameter: 340,
   /** Wheel diameter as a ratio of the available phone width. */
-  wheelDiameterRatio: 0.74,
+  wheelDiameterRatio: 0.76,
   /** Center Select button diameter as a ratio of the wheel diameter. */
   wheelInnerRatio: 0.36,
-  /** Gap between the screen bezel and the wheel. */
-  screenWheelGap: 36,
+  /**
+   * Minimum gap between the screen bezel and the wheel. The chassis column uses
+   * space-between, so any extra height becomes this gap. Kept as a floor for
+   * the shrink-to-fit calculation.
+   */
+  screenWheelGap: 20,
 } as const;
 
 export const wheel = {
@@ -123,7 +133,7 @@ export const themePresets = {
     shellColor: '#E8ECF2',
     wheelColor: '#FFFFFF',
     wheelTextColor: '#7A828E',
-    screenBgGradient: ['#5A5652', '#383532'] as const,
+    screenBgGradient: ['#5C5855', '#363330'] as const,
     accentColor: '#2971E7',
   },
   'u2-black-red': {
@@ -338,13 +348,16 @@ export const fonts = {
 } as const;
 
 export const radii = {
-  bezel: 16,
-  screen: 10,
+  /** Outer black screen bezel. */
+  bezel: 26,
+  /** Inner LCD viewport, inside the bezel. */
+  screen: 18,
   wheel: 999,
 } as const;
 
 export const spacing = {
-  bezelPadding: 6,
+  /** Bezel border thickness around the LCD. */
+  bezelPadding: 9,
   lcdPaddingH: 6,
   lcdPaddingV: 4,
   lcdRowHeight: 32,

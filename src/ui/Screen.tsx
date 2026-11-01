@@ -37,7 +37,15 @@ import { CoverFlow } from './CoverFlow';
 import { MenuList } from './MenuList';
 import { NowPlaying } from './NowPlaying';
 import { ProgressView } from './ProgressView';
-import { fonts, lcdPalettes, spacing, DEFAULT_APP_THEME, type AppThemeConfig, type LcdPalette } from './theme';
+import {
+  fonts,
+  lcdPalettes,
+  radii,
+  spacing,
+  DEFAULT_APP_THEME,
+  type AppThemeConfig,
+  type LcdPalette,
+} from './theme';
 import { visibleRowCount } from './windowing';
 
 type Props = {
@@ -358,8 +366,9 @@ export function Screen({ width, height, paletteName = 'color', appTheme = DEFAUL
 const styles = StyleSheet.create({
   lcd: {
     overflow: 'hidden',
-    // 4px inner screen radius: the acrylic pane sits inside the black bezel.
-    borderRadius: 4,
+    // The acrylic pane sits inside the thick black bezel, so it takes its own
+    // (smaller) radius from the theme.
+    borderRadius: radii.screen,
   },
   titleBar: {
     flexDirection: 'row',
@@ -410,7 +419,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    borderRadius: 4,
+    borderRadius: radii.screen,
     overflow: 'hidden',
   },
 });

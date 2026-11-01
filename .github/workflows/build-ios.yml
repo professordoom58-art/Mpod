@@ -179,15 +179,23 @@ jobs:
       contents: write
 
     steps:
+      # Explicit `path` so the published path is deterministic. Without it the
+      # artifact lands in the workspace root and a `dist/...` reference would
+      # never match.
       - name: Download IPA
         uses: actions/download-artifact@v4
         with:
           name: ipod-player-ipa
+          path: dist
 
+      # No actions/checkout in this job, so action-gh-release has no local git
+      # context. target_commitish tells it which commit the tag points at and
+      # lets it generate release notes.
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ needs.build.outputs.ipa_name }}
+          files: dist/${{ needs.build.outputs.ipa_name }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           fail_on_unmatched_files: true
 
@@ -196,7 +204,8 @@ jobs:
   release-edge:
     name: Publish rolling edge prerelease
     needs: build
-    if: github.ref == 'refs/heads/main'
+    # Manual runs publish edge too, not just pushes to main.
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -223,8 +232,12 @@ jobs:
         with:
           tag_name: edge
           name: Edge build (main)
+          # No checkout here either: pin the synthetic/edge tag to this commit.
+          target_commitish: ${{ github.sha }}
           prerelease: true
-          make_latest: false
+          # `legacy` keeps GitHub's default latest-release handling; the
+          # prerelease flag is what keeps edge off the "Latest" slot.
+          make_latest: legacy
           overwrite_files: true
           generate_release_notes: true
           files: dist/ipod-player-edge.ipa

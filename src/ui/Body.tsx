@@ -36,6 +36,11 @@ import {
 import { ClickWheel } from '../wheel/ClickWheel';
 import { useClickWheel } from '../wheel/useClickWheel';
 
+/** Chassis breathing room above the screen bezel, below the notch/status bar. */
+const CHASSIS_TOP_PAD = 10;
+/** Chassis breathing room below the wheel, above the home indicator. */
+const CHASSIS_BOTTOM_PAD = 28;
+
 type Props = {
   /** Available width from the parent (already inset-safe). */
   availableWidth: number;
@@ -45,22 +50,31 @@ type Props = {
 };
 
 export function Body({ availableWidth, availableHeight, showDebug }: Props) {
-  // Sizes, capped, and scaled down if the stack would overflow the height.
-  const { screenWidth, screenHeight, wheelSize } = useMemo(() => {
-    let sw = Math.min(availableWidth * layout.screenWidthRatio, layout.screenMaxWidth);
+  // Edge-to-edge geometry: the BLACK BEZEL spans 93% of the phone width (so the
+  // LCD inside it keeps a 12-14 pt chassis margin), the wheel sits in the lower
+  // thumb zone at ~76% of the phone width. Everything shrinks proportionally in
+  // the rare case that the stack would overflow a short viewport.
+  const { bezelWidth, screenWidth, screenHeight, wheelSize } = useMemo(() => {
+    let bw = Math.min(availableWidth * layout.screenWidthRatio, layout.screenMaxWidth);
+    let sw = Math.max(0, bw - spacing.bezelPadding * 2);
     let sh = sw / layout.screenAspect;
     let wheel = Math.min(availableWidth * layout.wheelDiameterRatio, layout.wheelMaxDiameter);
 
+    const innerHeight = Math.max(
+      0,
+      availableHeight - (CHASSIS_TOP_PAD + CHASSIS_BOTTOM_PAD),
+    );
     const bezelHeight = sh + spacing.bezelPadding * 2;
     const needed = bezelHeight + layout.screenWheelGap + wheel;
-    if (needed > availableHeight && needed > 0) {
-      const scale = availableHeight / needed;
-      sw *= scale;
+    if (needed > innerHeight && needed > 0) {
+      const scale = innerHeight / needed;
+      bw *= scale;
+      sw = Math.max(0, bw - spacing.bezelPadding * 2);
       sh = sw / layout.screenAspect;
       wheel *= scale;
     }
 
-    return { screenWidth: sw, screenHeight: sh, wheelSize: wheel };
+    return { bezelWidth: bw, screenWidth: sw, screenHeight: sh, wheelSize: wheel };
   }, [availableWidth, availableHeight]);
 
   const { onStep, onTap, onMenuLongPress, onSeekStart, onSeekEnd } = useWheelNav();
@@ -147,19 +161,20 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
         { width: availableWidth, height: availableHeight, backgroundColor: appTheme.shellColor },
       ]}
     >
+      {/*
+        Two children, space-between: the screen is pinned to the top of the
+        safe area and the wheel to the bottom thumb zone, so the leftover height
+        becomes one gap instead of two dead bands above and below the screen.
+      */}
       <View style={styles.stack}>
-        {/* Equals 1 equal-height segment above the screen. */}
-        <View style={styles.pusher} />
         <View
           style={[
             styles.bezel,
-            { width: screenWidth + spacing.bezelPadding * 2, borderRadius: radii.bezel },
+            { width: bezelWidth, borderRadius: radii.bezel, padding: spacing.bezelPadding },
           ]}
         >
           <Screen width={screenWidth} height={screenHeight} appTheme={appTheme} />
         </View>
-
-        <View style={{ height: layout.screenWheelGap }} />
 
         <GestureDetector gesture={gesture}>
           <View collapsable={false}>
@@ -171,17 +186,18 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
             />
           </View>
         </GestureDetector>
-        <View style={styles.pusher} />
+      </View>
 
-        {showDebug ? (
+      {showDebug ? (
+        <View style={styles.debug} pointerEvents="none">
           <DebugOverlay
             angleDeg={debug.angleDeg}
             accDeg={debug.accDeg}
             steps={debug.steps}
             flushMs={80}
           />
-        ) : null}
-      </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -190,18 +206,26 @@ const styles = StyleSheet.create({
   chassis: {
     backgroundColor: colors.chassisBg,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
   },
   stack: {
-    alignItems: 'center',
-  },
-  pusher: {
     flex: 1,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: CHASSIS_TOP_PAD,
+    paddingBottom: CHASSIS_BOTTOM_PAD,
   },
   bezel: {
     backgroundColor: colors.bezel,
     borderColor: colors.bezelEdge,
-    padding: spacing.bezelPadding,
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  /** Debug readout floats over the chassis and never joins the flex column. */
+  debug: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: CHASSIS_BOTTOM_PAD,
   },
 });

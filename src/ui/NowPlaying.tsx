@@ -8,8 +8,8 @@
  *   4. footer          — audio-output route bottom-left, nothing bottom-right
  *
  * The whole background is a vertical gradient taken from the active
- * AppThemeConfig (warm matte #5A5652 -> #383532 by default), so switching
- * theme in Settings > Themes repaints this screen without a relaunch.
+ * AppThemeConfig (warm matte #5C5855 -> #45423F -> #363330 by default), so
+ * switching theme in Settings > Themes repaints this screen without a relaunch.
  *
  * PERFORMANCE CONTRACT (unchanged from the previous implementation):
  *   - <NowPlaying /> subscribes only to queue/index/current, so the artwork
@@ -29,7 +29,7 @@ import Svg, { Defs, G, LinearGradient, Path, Rect, Stop } from 'react-native-svg
 import { click } from '../haptics/haptics';
 import { resolveArtworkUri } from '../library/resolveUri';
 import { usePlayerStore } from '../player/store';
-import { darkenHex, type AppThemeConfig } from './theme';
+import { darkenHex, mixHex, type AppThemeConfig } from './theme';
 
 type Props = {
   width: number;
@@ -39,29 +39,45 @@ type Props = {
 };
 
 /** Fixed bands of the screen, in points. */
-const STATUS_H = 22;
-const FOOTER_H = 22;
-/** Timestamps row + gap + 6 pt bar. */
-const SCRUB_H = 34;
-/** Horizontal padding for every band, so they all line up. */
-const PAD = 12;
+const STATUS_H = 28;
+const FOOTER_H = 24;
+/** Horizontal / vertical inset of every band, so they all line up. */
+const PAD_H = 18;
+const PAD_V = 14;
+/** Gap between the artwork block and the scrubber. */
+const SCRUB_MT = 14;
 /** Artwork corner radius, per the concept (10dp). */
 const ART_RADIUS = 10;
+/** Artwork edge as a fraction of the inner screen width. */
+const ART_RATIO = 0.44;
 /** How long the volume HUD stays visible after the last change. */
 const VOLUME_HUD_MS = 1800;
+/** Hard ceiling for a formatted timestamp, so garbage never renders "83:11:47". */
+const MAX_TIME_MS = 24 * 60 * 60 * 1000;
 
 /** Ink levels used by the metadata column. */
 const TITLE_INK = '#FFFFFF';
 const ARTIST_INK = 'rgba(255,255,255,0.78)';
-const ALBUM_INK = 'rgba(255,255,255,0.60)';
-const COUNTER_INK = 'rgba(255,255,255,0.60)';
-const CHROME_INK = 'rgba(255,255,255,0.82)';
+const ALBUM_INK = 'rgba(255,255,255,0.62)';
+const COUNTER_INK = 'rgba(255,255,255,0.62)';
+const TIME_INK = 'rgba(255,255,255,0.65)';
+const ROUTE_INK = 'rgba(255,255,255,0.92)';
 const TRACK_INK = 'rgba(255,255,255,0.25)';
 const FILL_INK = '#FFFFFF';
 
-/** Formats milliseconds as m:ss (or h:mm:ss when >= 1h). */
+/**
+ * Coerces a store value into a safe, non-negative, finite duration. Guards the
+ * "-83:11:47" bug: a negative, NaN or absurd duration now reads as 0 instead of
+ * formatting into hours/days of nonsense.
+ */
+function safeMs(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(Math.floor(value), MAX_TIME_MS);
+}
+
+/** Formats milliseconds as m:ss (or h:mm:ss when >= 1h). Never negative. */
 function formatTime(ms: number): string {
-  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const totalSec = Math.floor(safeMs(ms) / 1000);
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
@@ -101,58 +117,55 @@ function Clock() {
   return <Text style={styles.clock}>{label}</Text>;
 }
 
-/** Status-bar transport indicator: play triangle or pause bars. */
+/** Status-bar transport indicator: solid white play triangle or pause bars. */
 function TransportIcon() {
   const playing = usePlayerStore((s) => s.playing);
 
   return (
-    <Svg width={9} height={10} viewBox="0 0 9 10">
+    <Svg width={16} height={16} viewBox="0 0 16 16">
       {playing ? (
         <>
-          <Rect x={0} y={0} width={2.8} height={10} rx={0.9} fill={CHROME_INK} />
-          <Rect x={6.2} y={0} width={2.8} height={10} rx={0.9} fill={CHROME_INK} />
+          <Rect x={2} y={1.5} width={4.2} height={13} rx={1.2} fill={FILL_INK} />
+          <Rect x={9.8} y={1.5} width={4.2} height={13} rx={1.2} fill={FILL_INK} />
         </>
       ) : (
-        <Path d="M0.6 0.5 L8.4 5 L0.6 9.5 Z" fill={CHROME_INK} />
+        <Path d="M2.6 1.2 L13.6 8 L2.6 14.8 Z" fill={FILL_INK} />
       )}
     </Svg>
   );
 }
 
-/** Status-bar battery: outline, terminal nub and a 4-cell fill. */
+/**
+ * Status-bar battery: 26x13 outline with a solid white fill bar (not cells),
+ * and a small terminal nub on the right.
+ */
 function BatteryIcon({ level = 0.8 }: { level?: number }) {
-  const bodyW = 18;
-  const bodyH = 9;
-  const cells = 4;
-  const gap = 1;
-  const inset = 1.5;
-  const cellW = (bodyW - inset * 2 - gap * (cells - 1)) / cells;
-  const filled = Math.round(Math.min(1, Math.max(0, level)) * cells);
+  const bodyW = 23;
+  const bodyH = 12;
+  const inset = 2.2;
+  const fill = Math.min(1, Math.max(0, level));
 
   return (
-    <Svg width={bodyW + 3} height={bodyH} viewBox={`0 0 ${bodyW + 3} ${bodyH}`}>
+    <Svg width={26} height={13} viewBox="0 0 26 13">
       <Rect
         x={0.5}
         y={0.5}
         width={bodyW - 1}
         height={bodyH - 1}
-        rx={2}
-        stroke={CHROME_INK}
+        rx={3}
+        stroke={FILL_INK}
         strokeWidth={1}
         fill="none"
       />
-      <Rect x={bodyW} y={bodyH / 2 - 2} width={2} height={4} rx={0.8} fill={CHROME_INK} />
-      {Array.from({ length: cells }).map((_, i) => (
-        <Rect
-          key={i}
-          x={inset + i * (cellW + gap)}
-          y={inset}
-          width={cellW}
-          height={bodyH - inset * 2}
-          rx={0.6}
-          fill={i < filled ? CHROME_INK : 'rgba(255,255,255,0.22)'}
-        />
-      ))}
+      <Rect x={bodyW} y={bodyH / 2 - 2.5} width={2.5} height={5} rx={1} fill={FILL_INK} />
+      <Rect
+        x={inset}
+        y={inset}
+        width={Math.max(0, (bodyW - inset * 2) * fill)}
+        height={bodyH - inset * 2}
+        rx={1.4}
+        fill={FILL_INK}
+      />
     </Svg>
   );
 }
@@ -160,16 +173,16 @@ function BatteryIcon({ level = 0.8 }: { level?: number }) {
 /** Headphone glyph for the audio-output footer. */
 function HeadphonesIcon({ color }: { color: string }) {
   return (
-    <Svg width={11} height={11} viewBox="0 0 12 12">
+    <Svg width={18} height={18} viewBox="0 0 18 18">
       <Path
-        d="M1.4 8.2 V6.4 a4.6 4.6 0 0 1 9.2 0 V8.2"
+        d="M2.4 11.6 V9.4 a6.6 6.6 0 0 1 13.2 0 V11.6"
         stroke={color}
-        strokeWidth={1.2}
+        strokeWidth={1.8}
         fill="none"
         strokeLinecap="round"
       />
-      <Rect x={0.6} y={7.4} width={2.2} height={3.4} rx={1} fill={color} />
-      <Rect x={9.2} y={7.4} width={2.2} height={3.4} rx={1} fill={color} />
+      <Rect x={0.9} y={10.4} width={3.2} height={5.1} rx={1.5} fill={color} />
+      <Rect x={13.9} y={10.4} width={3.2} height={5.1} rx={1.5} fill={color} />
     </Svg>
   );
 }
@@ -237,15 +250,18 @@ function NowPlayingScrubber() {
   const positionMs = usePlayerStore((s) => s.positionMs);
   const durationMs = usePlayerStore((s) => s.durationMs);
 
-  const progress = durationMs > 0 ? Math.min(1, Math.max(0, positionMs / durationMs)) : 0;
-  const elapsed = formatTime(positionMs);
-  const remaining = formatTime(Math.max(0, durationMs - positionMs));
+  // Duration is the authority: a bad duration collapses the band to 0:00 /
+  // -0:00, and the position can never exceed it.
+  const duration = safeMs(durationMs);
+  const position = duration > 0 ? Math.min(safeMs(positionMs), duration) : 0;
+
+  const progress = duration > 0 ? position / duration : 0;
 
   return (
     <View style={styles.scrubber} pointerEvents="none">
       <View style={styles.timeRow}>
-        <Text style={styles.time}>{elapsed}</Text>
-        <Text style={styles.time}>{`-${remaining}`}</Text>
+        <Text style={styles.time}>{formatTime(position)}</Text>
+        <Text style={styles.time}>{`-${formatTime(duration - position)}`}</Text>
       </View>
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
@@ -307,75 +323,91 @@ export function NowPlaying({ width, height, theme }: Props) {
 
   const artworkUri = resolveArtworkUri(current?.artworkPath);
 
-  // The artwork is square and fills the content band as far as the width allows.
-  const contentH = Math.max(0, height - STATUS_H - SCRUB_H - FOOTER_H - 8);
-  const artSize = Math.max(56, Math.min(width * 0.46, contentH));
+  // 44% of the inner screen width: the content row is the only flexible band,
+  // so the artwork scales with the LCD instead of wasting a fixed size.
+  const innerWidth = Math.max(0, width - PAD_H * 2);
+  const artSize = Math.max(72, innerWidth * ART_RATIO);
+
+  // Theme drives the gradient; the middle stop is interpolated so the warm matte
+  // surfaces reads as a smooth three-stop vignette rather than a flat ramp.
+  const gradTop = theme.screenBgGradient[0];
+  const gradBottom = theme.screenBgGradient[1];
+  const gradMid = mixHex(gradTop, gradBottom, 0.5);
 
   return (
     <View style={[styles.wrap, { width, height }]}>
-      {/* Themed vertical background gradient. */}
+      {/* Themed vertical background gradient (three stops). */}
       <Svg style={StyleSheet.absoluteFill} width={width} height={height}>
         <Defs>
           <LinearGradient id="npBg" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0" stopColor={theme.screenBgGradient[0]} />
-            <Stop offset="1" stopColor={theme.screenBgGradient[1]} />
+            <Stop offset="0" stopColor={gradTop} />
+            <Stop offset="0.52" stopColor={gradMid} />
+            <Stop offset="1" stopColor={gradBottom} />
           </LinearGradient>
         </Defs>
         <Rect x={0} y={0} width={width} height={height} fill="url(#npBg)" />
       </Svg>
 
-      {/* 1. Status bar: clock left, transport + battery right. */}
-      <View style={[styles.statusBar, { height: STATUS_H }]}>
-        <Clock />
-        <View style={styles.statusRight}>
-          <TransportIcon />
-          <BatteryIcon />
-        </View>
-      </View>
-
-      {/* 2. Content row: square artwork + metadata stack. */}
-      <View style={styles.contentRow}>
-        <View style={[styles.artShadow, { width: artSize, height: artSize }]}>
-          <View style={styles.artClip}>
-            {current && artworkUri ? (
-              <Image source={{ uri: artworkUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-            ) : (
-              <FallbackCover size={artSize} accent={theme.accentColor} />
-            )}
+      <View style={styles.content}>
+        {/* 1. Status bar: clock left, transport + battery right. */}
+        <View style={[styles.statusBar, { height: STATUS_H }]}>
+          <Clock />
+          <View style={styles.statusRight}>
+            <TransportIcon />
+            <BatteryIcon />
           </View>
         </View>
 
-        <View style={[styles.meta, { height: artSize }]}>
-          {/* Single-line title, tail ellipsis, per the concept. */}
-          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.title}>
-            {current?.title ?? 'No track'}
-          </Text>
+        {/* 2. Content row: square artwork + metadata stack. */}
+        <View style={styles.contentRow}>
+          <View style={[styles.artShadow, { width: artSize, height: artSize }]}>
+            <View style={styles.artClip}>
+              {current && artworkUri ? (
+                <Image
+                  source={{ uri: artworkUri }}
+                  style={StyleSheet.absoluteFill}
+                  resizeMode="cover"
+                />
+              ) : (
+                <FallbackCover size={artSize} accent={theme.accentColor} />
+              )}
+            </View>
+          </View>
 
-          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.artist}>
-            {current?.artist ?? ''}
-          </Text>
-          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.album}>
-            {current?.album ?? ''}
-          </Text>
-          <Text numberOfLines={1} style={styles.counter}>
-            {queue.length > 0 ? `${index + 1} of ${queue.length}` : ''}
-          </Text>
+          <View style={[styles.meta, { height: artSize }]}>
+            {/* Text block is centred against the upper 75% of the artwork. */}
+            <View style={[styles.metaText, { height: artSize * 0.75 }]}>
+              <Text numberOfLines={1} ellipsizeMode="tail" style={styles.title}>
+                {current?.title ?? 'No track'}
+              </Text>
 
-          <View style={styles.metaSpacer} />
-          <View style={styles.moreSlot}>
-            <MoreButton />
+              <Text numberOfLines={1} ellipsizeMode="tail" style={styles.artist}>
+                {current?.artist ?? ''}
+              </Text>
+              <Text numberOfLines={1} ellipsizeMode="tail" style={styles.album}>
+                {current?.album ?? ''}
+              </Text>
+              <Text numberOfLines={1} style={styles.counter}>
+                {queue.length > 0 ? `${index + 1} of ${queue.length}` : ''}
+              </Text>
+            </View>
+
+            <View style={styles.metaSpacer} />
+            <View style={styles.moreSlot}>
+              <MoreButton />
+            </View>
           </View>
         </View>
-      </View>
 
-      {/* 3. Scrubber: timestamps above the bar. */}
-      <NowPlayingScrubber />
+        {/* 3. Scrubber: timestamps above the bar. */}
+        <NowPlayingScrubber />
 
-      {/* 4. Footer: audio route left, deliberately empty right. */}
-      <View style={[styles.footer, { height: FOOTER_H }]}>
-        <View style={styles.route}>
-          <HeadphonesIcon color={CHROME_INK} />
-          <Text style={styles.routeText}>Headphones</Text>
+        {/* 4. Footer: audio route left, deliberately empty right. */}
+        <View style={[styles.footer, { height: FOOTER_H }]}>
+          <View style={styles.route}>
+            <HeadphonesIcon color={ROUTE_INK} />
+            <Text style={styles.routeText}>Headphones</Text>
+          </View>
         </View>
       </View>
 
@@ -388,22 +420,27 @@ const styles = StyleSheet.create({
   wrap: {
     overflow: 'hidden',
   },
+  /** Inner padding band: 18 dp horizontal, 14 dp vertical. */
+  content: {
+    flex: 1,
+    paddingHorizontal: PAD_H,
+    paddingVertical: PAD_V,
+  },
 
   // 1. status bar
   statusBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: PAD,
   },
   statusRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   clock: {
     color: TITLE_INK,
-    fontSize: 11,
+    fontSize: 15,
     fontWeight: '600',
     letterSpacing: 0.2,
     fontVariant: ['tabular-nums'],
@@ -414,7 +451,6 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: PAD,
   },
   artShadow: {
     borderRadius: ART_RADIUS,
@@ -433,30 +469,33 @@ const styles = StyleSheet.create({
   },
   meta: {
     flex: 1,
-    marginLeft: PAD,
+    marginLeft: 16,
     justifyContent: 'flex-start',
+  },
+  metaText: {
+    justifyContent: 'center',
   },
   title: {
     color: TITLE_INK,
-    fontSize: 18,
+    fontSize: 21,
     fontWeight: '700',
-    lineHeight: 22,
+    lineHeight: 25,
   },
   artist: {
     color: ARTIST_INK,
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 2,
+    fontSize: 16,
+    fontWeight: '400',
+    marginTop: 4,
   },
   album: {
     color: ALBUM_INK,
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: '400',
-    marginTop: 1,
+    marginTop: 3,
   },
   counter: {
     color: COUNTER_INK,
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '500',
     marginTop: 6,
     fontVariant: ['tabular-nums'],
@@ -468,19 +507,19 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
   moreButton: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'transparent',
+    borderWidth: 1.8,
+    borderColor: TITLE_INK,
   },
   moreButtonPressed: {
-    backgroundColor: 'rgba(255,255,255,0.26)',
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
   dot: {
     width: 3,
@@ -491,31 +530,29 @@ const styles = StyleSheet.create({
 
   // 3. scrubber
   scrubber: {
-    paddingHorizontal: PAD,
-    paddingTop: 2,
-    paddingBottom: 6,
+    marginTop: SCRUB_MT,
   },
   timeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   time: {
-    color: COUNTER_INK,
-    fontSize: 11,
+    color: TIME_INK,
+    fontSize: 14,
     fontWeight: '500',
     fontVariant: ['tabular-nums'],
   },
   progressTrack: {
-    height: 6,
-    borderRadius: 3,
+    height: 7,
+    borderRadius: 3.5,
     backgroundColor: TRACK_INK,
     overflow: 'hidden',
   },
   progressFill: {
-    height: 6,
-    borderRadius: 3,
+    height: 7,
+    borderRadius: 3.5,
     backgroundColor: FILL_INK,
   },
 
@@ -523,25 +560,25 @@ const styles = StyleSheet.create({
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: PAD,
+    marginTop: 12,
   },
   route: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 7,
   },
   routeText: {
-    color: COUNTER_INK,
-    fontSize: 11,
+    color: ROUTE_INK,
+    fontSize: 15,
     fontWeight: '500',
   },
 
   // volume HUD (transient, floats above the footer)
   volumeHud: {
     position: 'absolute',
-    left: PAD,
-    right: PAD,
-    bottom: FOOTER_H + 10,
+    left: PAD_H,
+    right: PAD_H,
+    bottom: PAD_V + FOOTER_H + 8,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(20,21,24,0.92)',

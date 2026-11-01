@@ -5,16 +5,23 @@
  * `android/` is generated and gitignored, so editing it by hand is not
  * durable. This plugin injects the two rules described in AGENTS.md §8:
  *
- *   1. Root project — resolutionStrategy
+ *   1. Global resolutionStrategy — every project, every configuration
  *        @missingcore/react-native-metadata-retriever 3.2.1 depends on a
  *        repackaged Media3 fork under `com.github.MissingCore.media` whose
  *        AARs keep the `androidx.media3.*` package names, while expo-audio
  *        pulls the standard `androidx.media3` modules. Both therefore ship
- *        the same classes and the build fails with duplicate class errors.
+ *        the same classes and the build failed with
+ *        "Duplicate class androidx.media3.extractor.*".
  *        Every fork module is redirected onto its upstream counterpart
  *        (the same extractor/common/container/decoder set; `media3-inspector`
  *        exists upstream at the same version), so only one copy of each class
  *        can ever reach the APK.
+ *
+ *        The rule must be nested inside `allprojects {`:
+ *        `configurations.configureEach { ... }`. A bare top-level
+ *        `configurations.all { ... }` (what an earlier version of this plugin
+ *        emitted) only configures the ROOT project's own configurations, which
+ *        never resolve media3, so `:app` still packaged both copies.
  *
  *   2. Retriever subproject — a dependency constraint pinning
  *        `androidx.media3:media3-common` to the same version. The fork's
@@ -49,26 +56,34 @@ const ROOT_BODY = `
   // @missingcore/react-native-metadata-retriever 3.2.1 depends on a repackaged
   // Media3 fork (${FORK_GROUP}:media3-*:${MEDIA3_VERSION}-MissingCore.1)
   // that keeps the androidx.media3.* package names, while expo-audio pulls the
-  // standard androidx.media3 modules. Both therefore ship the same classes and
-  // the APK step fails with duplicate class errors.
+  // standard androidx.media3 modules. Both therefore ship the same classes, so
+  // the APK step failed with "Duplicate class androidx.media3.extractor.*".
   //
   // Every fork module is redirected onto its upstream counterpart, which
   // publishes the same class set (media3-inspector included), so exactly one
-  // copy of every androidx.media3 class ends up in the graph. The explicit
+  // copy of every androidx.media3 class can reach the graph. The explicit
   // extractor substitution documents the original failure; eachDependency
   // covers the rest of the fork modules (common, container, decoder,
   // datasource, database, effect, exoplayer, inspector, ...).
   //
+  // This MUST live inside \`allprojects { configurations.configureEach { ... } }\`:
+  // a bare top-level \`configurations.all\` only sees the ROOT project's own
+  // configurations, which never resolve media3, so the app module kept both
+  // copies. Do not replace it with per-module \`exclude\` rules either - those
+  // are erased by every prebuild because android/app/build.gradle is generated.
+  //
   // Keep this block identical to the config plugin, or a prebuild will not
   // reproduce it.
-  configurations.all {
-    resolutionStrategy {
-      dependencySubstitution {
-        substitute module('${FORK_GROUP}:media3-extractor') using module('androidx.media3:media3-extractor:${MEDIA3_VERSION}')
-      }
-      eachDependency { details ->
-        if (details.requested.group == '${FORK_GROUP}') {
-          details.useTarget "androidx.media3:\${details.requested.name}:${MEDIA3_VERSION}"
+  allprojects {
+    configurations.configureEach {
+      resolutionStrategy {
+        dependencySubstitution {
+          substitute module('${FORK_GROUP}:media3-extractor') using module('androidx.media3:media3-extractor:${MEDIA3_VERSION}')
+        }
+        eachDependency { details ->
+          if (details.requested.group == '${FORK_GROUP}') {
+            details.useTarget "androidx.media3:\${details.requested.name}:${MEDIA3_VERSION}"
+          }
         }
       }
     }
