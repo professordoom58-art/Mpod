@@ -5,11 +5,11 @@
  * angle accumulation with wrap to (-PI, PI], one step per tickDeg, clockwise
  * = +1, worklets on the UI thread, only onStep/onTap crossing to JS.
  *
- * Three things were added on top of the reference behaviour:
+ * Things added on top of the reference behaviour:
  *
  * 1. Gestures are built ONCE (useMemo) and never rebuilt on render. Callbacks
- *    are held in shared values so a re-render cannot recreate the gesture
- *    objects, which used to drop an in-flight pan mid-spin.
+ *    are held in refs so a re-render cannot recreate the gesture objects, which
+ *    used to drop an in-flight pan mid-spin.
  * 2. Ring-slip guard: if the finger leaves the ring and comes back, the angle
  *    is re-seeded instead of being accumulated across the gap. Without this a
  *    finger sliding over the center button produced one huge phantom jump.
@@ -18,6 +18,10 @@
  *    wrong button.
  * 4. Long-press MENU (500 ms) is raced ahead of tap, so holding MENU jumps to
  *    the root menu instead of also registering a short press.
+ * 5. Long-press NEXT/PREV (350 ms) starts fast-forward/rewind. The seek loop
+ *    itself lives on the JS thread (see nav/wheelNav.ts); this gesture only
+ *    reports press start and release, and it wins the race, so releasing after
+ *    a hold never also fires a track skip.
  *
  * The debug shared values (dbg*) are read-only for the overlay and never
  * influence control flow.
@@ -27,7 +31,12 @@ import { useCallback, useMemo, useRef } from 'react';
 import { Gesture } from 'react-native-gesture-handler';
 import { runOnJS, useSharedValue, type SharedValue } from 'react-native-reanimated';
 
+import { timing } from '../ui/theme';
+
 export type Zone = 'menu' | 'next' | 'prev' | 'play' | 'select';
+
+/** Sectors that support hold-to-seek. */
+export type SeekZone = 'next' | 'prev';
 
 type Opts = {
   size: number;
@@ -37,6 +46,10 @@ type Opts = {
   onTap: (zone: Zone) => void;
   /** Optional long-press on the Menu zone (jump to main menu). */
   onMenuLongPress?: () => void;
+  /** Hold on Next/Prev passed the hold threshold: start seeking. */
+  onSeekStart?: (zone: SeekZone) => void;
+  /** Finger released (or the gesture was cancelled): stop seeking. */
+  onSeekEnd?: () => void;
 };
 
 const TAU = Math.PI * 2;
@@ -50,6 +63,9 @@ const RAD_TO_DEG = 180 / Math.PI;
 
 /** Half-width of the dead zone around each sector boundary, in degrees. */
 const DEAD_ZONE_DEG = 10;
+
+/** Hold time before Next/Prev becomes fast-forward/rewind. */
+const SEEK_HOLD_MS = timing.seekHoldMs;
 
 /**
  * Resolves an angle in degrees to a tap zone, or null inside a dead zone.
@@ -70,6 +86,22 @@ function zoneForAngle(a: number): Zone | null {
   return 'prev';
 }
 
+/**
+ * Hold zone for seek: Next and Prev sectors only, ignoring the tap dead zones
+ * (a deliberate hold is not an accidental boundary tap).
+ */
+function seekZoneFor(x: number, y: number, c: number, inner: number): SeekZone | null {
+  'worklet';
+  const dx = x - c;
+  const dy = y - c;
+  const r = Math.hypot(dx, dy);
+  if (r > c || r <= inner) return null;
+  const a = (Math.atan2(dy, dx) * 180) / Math.PI;
+  if (a > -45 && a <= 45) return 'next';
+  if (a > 135 || a <= -135) return 'prev';
+  return null;
+}
+
 export function useClickWheel({
   size,
   innerRatio = 0.36,
@@ -77,6 +109,8 @@ export function useClickWheel({
   onStep,
   onTap,
   onMenuLongPress,
+  onSeekStart,
+  onSeekEnd,
 }: Opts) {
   const c = size / 2;
   const inner = c * innerRatio;
@@ -100,10 +134,14 @@ export function useClickWheel({
   const stepRef = useRef(onStep);
   const tapRef = useRef(onTap);
   const longPressRef = useRef(onMenuLongPress);
+  const seekStartRef = useRef(onSeekStart);
+  const seekEndRef = useRef(onSeekEnd);
 
   stepRef.current = onStep;
   tapRef.current = onTap;
   longPressRef.current = onMenuLongPress;
+  seekStartRef.current = onSeekStart;
+  seekEndRef.current = onSeekEnd;
 
   const invokeStep = useCallback((dir: 1 | -1) => {
     stepRef.current(dir);
@@ -115,6 +153,14 @@ export function useClickWheel({
 
   const invokeLongPress = useCallback(() => {
     longPressRef.current?.();
+  }, []);
+
+  const invokeSeekStart = useCallback((zone: SeekZone) => {
+    seekStartRef.current?.(zone);
+  }, []);
+
+  const invokeSeekEnd = useCallback(() => {
+    seekEndRef.current?.();
   }, []);
 
   const gesture = useMemo(() => {
@@ -200,11 +246,37 @@ export function useClickWheel({
         if (isMenu) runOnJS(invokeLongPress)();
       });
 
-    // LongPress must win over Tap when it fires, so it is raced first.
-    return Gesture.Race(longPressMenu, pan, tap);
+    /**
+     * Hold-to-seek on Next/Prev. `onTouchesDown` fails the gesture immediately
+     * when the finger is anywhere else, so it can never steal the 500 ms MENU
+     * long-press or the center Select hold from the race below.
+     */
+    const longPressSeek = Gesture.LongPress()
+      .minDuration(SEEK_HOLD_MS)
+      .maxDistance(10)
+      .onTouchesDown((e, manager) => {
+        const touch = e.allTouches[0];
+        if (!touch || seekZoneFor(touch.x, touch.y, c, inner) === null) {
+          manager.fail();
+        }
+      })
+      .onStart((e) => {
+        const zone = seekZoneFor(e.x, e.y, c, inner);
+        if (zone !== null) runOnJS(invokeSeekStart)(zone);
+      })
+      .onFinalize(() => {
+        // Fires on release and on cancellation. Harmless when no seek is
+        // running (a short tap fails this gesture before it activates).
+        runOnJS(invokeSeekEnd)();
+      });
+
+    // LongPress gestures must win over Tap when they fire, so they are raced
+    // first. Only one of the two can activate: each fails itself outside its
+    // own sectors.
+    return Gesture.Race(longPressSeek, longPressMenu, pan, tap);
     // Only geometry changes rebuild the gesture; the callbacks are stable
     // trampolines that read refs, so they are safe dependencies.
-  }, [c, inner, tick, invokeStep, invokeTap, invokeLongPress]);
+  }, [c, inner, tick, invokeStep, invokeTap, invokeLongPress, invokeSeekStart, invokeSeekEnd]);
 
   const debug: ClickWheelDebugValues = useMemo(
     () => ({ angleDeg: dbgAngleDeg, accDeg: dbgAccDeg, steps: dbgSteps }),

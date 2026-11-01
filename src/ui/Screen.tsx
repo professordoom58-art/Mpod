@@ -33,16 +33,22 @@ import {
   useMenuStore,
 } from '../nav/menuStack';
 import { usePlayerStore } from '../player/store';
+import { CoverFlow } from './CoverFlow';
 import { MenuList } from './MenuList';
 import { NowPlaying } from './NowPlaying';
 import { ProgressView } from './ProgressView';
-import { fonts, lcdPalettes, spacing, type LcdPalette } from './theme';
+import { fonts, lcdPalettes, spacing, DEFAULT_APP_THEME, type AppThemeConfig, type LcdPalette } from './theme';
 import { visibleRowCount } from './windowing';
 
 type Props = {
   width: number;
   height: number;
   paletteName?: keyof typeof lcdPalettes;
+  /**
+   * Active app theme. The accent color overrides the LCD highlight/progress
+   * colors and the screen background gradient drives the Now Playing screen.
+   */
+  appTheme?: AppThemeConfig;
 };
 
 /** Brushed-metal header gradient and its hairline bottom edge. */
@@ -152,9 +158,19 @@ function BatteryIcon({ level }: { level: number }) {
  * The brushed-metal title bar. Subscribes to `playing` itself so the play
  * indicator can change without re-rendering the list below it.
  */
-function ScreenHeader({ title, width }: { title: string; width: number }) {
+function ScreenHeader({
+  title,
+  width,
+  variant = 'plain',
+}: {
+  title: string;
+  width: number;
+  /** Cover Flow puts the bold title on the left and the transport + battery right. */
+  variant?: 'plain' | 'coverflow';
+}) {
   const playing = usePlayerStore((s) => s.playing);
   const h = spacing.titleBarHeight;
+  const coverFlow = variant === 'coverflow';
 
   return (
     <View style={[styles.titleBar, { height: h }]}>
@@ -175,21 +191,54 @@ function ScreenHeader({ title, width }: { title: string; width: number }) {
         <Rect x={0} y={h - 1} width={width} height={1} fill={HEADER_BORDER} />
       </Svg>
 
-      <View style={styles.titleLeft}>{playing ? <PlayPauseGlyph playing /> : null}</View>
+      {coverFlow ? (
+        <>
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={[styles.titleText, styles.titleTextLeft]}
+          >
+            {title}
+          </Text>
 
-      <Text numberOfLines={1} ellipsizeMode="tail" style={styles.titleText}>
-        {title}
-      </Text>
+          <View style={styles.coverFlowRight}>
+            {playing ? (
+              <View style={styles.headerPlay}>
+                <PlayPauseGlyph playing />
+              </View>
+            ) : null}
+            <BatteryIcon level={0.8} />
+          </View>
+        </>
+      ) : (
+        <>
+          <View style={styles.titleLeft}>{playing ? <PlayPauseGlyph playing /> : null}</View>
 
-      <View style={styles.titleRight}>
-        <BatteryIcon level={0.8} />
-      </View>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.titleText}>
+            {title}
+          </Text>
+
+          <View style={styles.titleRight}>
+            <BatteryIcon level={0.8} />
+          </View>
+        </>
+      )}
     </View>
   );
 }
 
-export function Screen({ width, height, paletteName = 'color' }: Props) {
-  const palette: LcdPalette = lcdPalettes[paletteName];
+export function Screen({ width, height, paletteName = 'color', appTheme = DEFAULT_APP_THEME }: Props) {
+  // The accent color from the active theme replaces the LCD's blue highlight
+  // and progress fill, so a theme change repaints the list and progress bars
+  // without touching MenuList/ProgressView.
+  const palette: LcdPalette = useMemo(() => {
+    const base = lcdPalettes[paletteName];
+    return {
+      ...base,
+      highlightBackground: appTheme.accentColor,
+      progressFill: appTheme.accentColor,
+    };
+  }, [paletteName, appTheme.accentColor]);
 
   const title = useMenuStore(selectTopTitle);
   const items = useMenuStore(selectTopItems);
@@ -219,6 +268,18 @@ export function Screen({ width, height, paletteName = 'color' }: Props) {
     if (kind === 'progress') {
       return <ProgressView width={width} height={bodyHeight} status={status} palette={palette} />;
     }
+    if (kind === 'coverflow') {
+      return (
+        <CoverFlow
+          items={items}
+          selectedIndex={selectedIndex}
+          width={width}
+          height={bodyHeight}
+          palette={palette}
+          loading={loading}
+        />
+      );
+    }
     return (
       <MenuList
         items={items}
@@ -244,14 +305,19 @@ export function Screen({ width, height, paletteName = 'color' }: Props) {
     status,
   ]);
 
-  // Now Playing owns the full body: its own dark header, artwork and metadata.
+  // Now Playing owns the full body: its own themed gradient, status bar,
+  // artwork, metadata, scrubber and footer.
   if (kind === 'nowplaying') {
-    return <NowPlaying width={width} height={height} />;
+    return <NowPlaying width={width} height={height} theme={appTheme} />;
   }
 
   return (
     <View style={[styles.lcd, { width, height, backgroundColor: palette.background }]}>
-      <ScreenHeader title={title} width={width} />
+      <ScreenHeader
+        title={title}
+        width={width}
+        variant={kind === 'coverflow' ? 'coverflow' : 'plain'}
+      />
 
       {listContent}
 
@@ -317,6 +383,19 @@ const styles = StyleSheet.create({
     fontSize: fonts.lcdTitleSize,
     fontWeight: '700',
     color: HEADER_TEXT,
+  },
+  /** Cover Flow: bold title flush left, transport and battery grouped right. */
+  titleTextLeft: {
+    textAlign: 'left',
+    fontWeight: '800',
+  },
+  coverFlowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  headerPlay: {
+    marginRight: 6,
   },
   statusLine: {
     justifyContent: 'center',

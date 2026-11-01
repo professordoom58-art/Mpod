@@ -10,7 +10,12 @@ import {
   setSetting,
   setSettingBool,
 } from './db';
-import { isChassisColor, type ChassisColor } from '../ui/theme';
+import {
+  DEFAULT_THEME_ID,
+  isThemeId,
+  type ThemeId,
+  type ThemeOverrides,
+} from '../ui/theme';
 
 export const SETTING_KEYS = {
   wheelTickDeg: 'wheel.tickDeg',
@@ -20,7 +25,8 @@ export const SETTING_KEYS = {
   lastScanMs: 'scan.lastScanMs',
   lastScanFailed: 'scan.lastScanFailed',
   lastScanFallback: 'scan.lastScanFallback',
-  caseColor: 'ui.caseColor',
+  themeId: 'ui.theme',
+  themeCustom: 'ui.themeCustom',
   lastTrackId: 'player.lastTrackId',
   lastPositionMs: 'player.lastPositionMs',
 } as const;
@@ -29,7 +35,7 @@ export const DEFAULTS = {
   wheelTickDeg: 15,
   hapticsEnabled: true,
   minTrackLengthMs: 30000,
-  caseColor: 'silver' as ChassisColor,
+  themeId: DEFAULT_THEME_ID,
 } as const;
 
 export const WHEEL_TICK_MIN = 10;
@@ -46,7 +52,10 @@ export type Settings = {
   lastScanMs: number;
   lastScanFailed: number;
   lastScanFallback: number;
-  caseColor: ChassisColor;
+  /** Selected built-in theme preset. */
+  themeId: ThemeId;
+  /** Per-field overrides for the "Custom Colors" mode, or null when off. */
+  customTheme: ThemeOverrides | null;
 };
 
 export async function loadSettings(): Promise<Settings> {
@@ -58,7 +67,8 @@ export async function loadSettings(): Promise<Settings> {
     lastScanMs,
     lastScanFailed,
     lastScanFallback,
-    caseColorRaw,
+    themeIdRaw,
+    themeCustomRaw,
   ] = await Promise.all([
     getSettingNumber(SETTING_KEYS.wheelTickDeg, DEFAULTS.wheelTickDeg),
     getSettingBool(SETTING_KEYS.hapticsEnabled, DEFAULTS.hapticsEnabled),
@@ -67,7 +77,8 @@ export async function loadSettings(): Promise<Settings> {
     getSettingNumber(SETTING_KEYS.lastScanMs, 0),
     getSettingNumber(SETTING_KEYS.lastScanFailed, 0),
     getSettingNumber(SETTING_KEYS.lastScanFallback, 0),
-    getSetting(SETTING_KEYS.caseColor),
+    getSetting(SETTING_KEYS.themeId),
+    getSetting(SETTING_KEYS.themeCustom),
   ]);
 
   return {
@@ -78,8 +89,23 @@ export async function loadSettings(): Promise<Settings> {
     lastScanMs,
     lastScanFailed,
     lastScanFallback,
-    caseColor: isChassisColor(caseColorRaw) ? caseColorRaw : DEFAULTS.caseColor,
+    themeId: isThemeId(themeIdRaw) ? themeIdRaw : DEFAULTS.themeId,
+    customTheme: parseThemeOverrides(themeCustomRaw),
   };
+}
+
+/** Parses persisted custom-theme JSON; a corrupt value means "no overrides". */
+function parseThemeOverrides(raw: string | null): ThemeOverrides | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as ThemeOverrides;
+    }
+  } catch {
+    /* fall through to null */
+  }
+  return null;
 }
 
 export function clampTickDeg(value: number): number {
@@ -122,8 +148,13 @@ export async function readRaw(key: string): Promise<string | null> {
   return getSetting(key);
 }
 
-export async function setCaseColor(value: ChassisColor): Promise<void> {
-  await setSetting(SETTING_KEYS.caseColor, value);
+export async function setThemeId(value: ThemeId): Promise<void> {
+  await setSetting(SETTING_KEYS.themeId, value);
+}
+
+/** Writes the custom overrides, or clears them when null. */
+export async function setThemeOverrides(value: ThemeOverrides | null): Promise<void> {
+  await setSetting(SETTING_KEYS.themeCustom, value ? JSON.stringify(value) : '');
 }
 
 /**

@@ -13,6 +13,11 @@
  *   - an inner shadow ring darkens the rim where it meets the chassis;
  *   - the center Select button is CONCAVE: a radial gradient that is light at
  *     the rim and darker in the middle, the inverse of a raised button.
+ *
+ * Theme support (Feature 3): the face, its edge, the concave Select button and
+ * the label ink all derive from `wheelColor` / `wheelTextColor`, so a theme
+ * change repaints the wheel reactively. The face gradient stops and edges are
+ * computed with the shared color helpers instead of being hard-coded white.
  * No Platform branching.
  */
 
@@ -29,7 +34,7 @@ import Svg, {
   Text as SvgText,
 } from 'react-native-svg';
 
-import { colors, layout } from '../ui/theme';
+import { darkenHex, hexLuminance, layout } from '../ui/theme';
 
 type Props = {
   /** Outer diameter in points. */
@@ -38,17 +43,21 @@ type Props = {
   innerRatio?: number;
   /** Draws the four labels. */
   showLabels?: boolean;
+  /** Wheel face color from the active AppThemeConfig. */
+  wheelColor?: string;
+  /** Wheel label/glyph ink from the active AppThemeConfig. */
+  wheelTextColor?: string;
   /**
-   * Case tint for the concave Select button: `light` is the lit rim, `dark`
-   * the recessed middle. Defaults to the silver finish.
+   * Optional explicit concavity override: `light` is the lit rim, `dark` the
+   * recessed middle. Defaults to shades derived from `wheelColor`.
    */
   center?: { light: string; dark: string };
 };
 
-const DEFAULT_CENTER = { light: '#ECEFF3', dark: '#DCE1E7' } as const;
-
+/** iPod Classic silver face, used until a theme is resolved. */
+const DEFAULT_WHEEL_COLOR = '#FFFFFF';
 /** Crisp label ink, per the iPod Classic wheel. */
-const LABEL_COLOR = '#858D99';
+const DEFAULT_WHEEL_INK = '#858D99';
 
 /** Scaled coordinate helpers: draw in a ~±5 unit space, scale by `k`. */
 const k = (labelSize: number) => labelSize / 11;
@@ -93,12 +102,28 @@ export function ClickWheel({
   size,
   innerRatio = layout.wheelInnerRatio,
   showLabels = true,
-  center = DEFAULT_CENTER,
+  wheelColor = DEFAULT_WHEEL_COLOR,
+  wheelTextColor = DEFAULT_WHEEL_INK,
+  center,
 }: Props) {
   const c = size / 2;
   const inner = c * innerRatio;
   const labelR = (inner + c) / 2;
   const labelSize = Math.max(11, Math.round(size * 0.06));
+
+  // Theme-derived finish. For the default white face these resolve to the
+  // original silver values; for a dark or colored wheel they stay in family.
+  const faceTop = wheelColor;
+  const faceMid = darkenHex(wheelColor, 0.03);
+  const faceBottom = darkenHex(wheelColor, 0.11);
+  const faceEdge = darkenHex(wheelColor, 0.14);
+  const centerLight = center?.light ?? darkenHex(wheelColor, 0.06);
+  const centerDark = center?.dark ?? darkenHex(wheelColor, 0.14);
+  const centerEdge = darkenHex(wheelColor, 0.2);
+
+  // A white sheen at full strength washes out a black or red wheel, so the
+  // ring gloss scales with the face brightness (0.15 .. 0.5).
+  const sheenOpacity = 0.15 + 0.35 * hexLuminance(wheelColor);
 
   return (
     <View style={[styles.wrap, { width: size, height: size }]}>
@@ -106,16 +131,16 @@ export function ClickWheel({
         <Defs>
           {/* Wheel face: bright at the upper-left, falling off to the rim. */}
           <RadialGradient id="wheelFace" cx="38%" cy="32%" r="78%">
-            <Stop offset="0" stopColor="#FFFFFF" />
-            <Stop offset="0.72" stopColor="#F7F8FA" />
-            <Stop offset="1" stopColor="#E4E7EC" />
+            <Stop offset="0" stopColor={faceTop} />
+            <Stop offset="0.72" stopColor={faceMid} />
+            <Stop offset="1" stopColor={faceBottom} />
           </RadialGradient>
 
           {/* Concave Select button: darker in the middle, lit at the rim. */}
           <RadialGradient id="selectConcave" cx="50%" cy="50%" r="62%">
-            <Stop offset="0" stopColor={center.dark} />
-            <Stop offset="0.62" stopColor={center.light} />
-            <Stop offset="1" stopColor={center.light} />
+            <Stop offset="0" stopColor={centerDark} />
+            <Stop offset="0.62" stopColor={centerLight} />
+            <Stop offset="1" stopColor={centerLight} />
           </RadialGradient>
 
           {/* Rim shadow: the recess where the wheel meets the chassis. */}
@@ -138,24 +163,24 @@ export function ClickWheel({
 
         {/* Recessed rim: darkens the outer edge so the wheel sits IN the chassis. */}
         <Circle cx={c} cy={c} r={c} fill="url(#rimShadow)" />
-        <Circle cx={c} cy={c} r={c - 0.75} stroke={colors.wheelRingEdge} strokeWidth={1.5} fill="none" />
+        <Circle cx={c} cy={c} r={c - 0.75} stroke={faceEdge} strokeWidth={1.5} fill="none" />
 
         {/* Ring band sheen. */}
-        <Circle cx={c} cy={c} r={c - 2} fill="url(#ringSheen)" opacity={0.5} />
+        <Circle cx={c} cy={c} r={c - 2} fill="url(#ringSheen)" opacity={sheenOpacity} />
 
         {/* Inner edge where the center button meets the ring. */}
-        <Circle cx={c} cy={c} r={inner} stroke={colors.wheelRingEdge} strokeWidth={1} fill="none" />
+        <Circle cx={c} cy={c} r={inner} stroke={faceEdge} strokeWidth={1} fill="none" />
 
         {/* Concave Select button. */}
         <Circle cx={c} cy={c} r={inner} fill="url(#selectConcave)" />
-        <Circle cx={c} cy={c} r={inner - 0.5} stroke={colors.wheelCenterEdge} strokeWidth={1} fill="none" />
+        <Circle cx={c} cy={c} r={inner - 0.5} stroke={centerEdge} strokeWidth={1} fill="none" />
 
         {showLabels ? (
           <G>
             <SvgText
               x={c}
               y={c - labelR + labelSize * 0.4}
-              fill={LABEL_COLOR}
+              fill={wheelTextColor}
               fontSize={labelSize}
               fontWeight="700"
               letterSpacing={1}
@@ -163,9 +188,9 @@ export function ClickWheel({
             >
               MENU
             </SvgText>
-            <PrevGlyph cx={c - labelR} cy={c} color={LABEL_COLOR} labelSize={labelSize} />
-            <NextGlyph cx={c + labelR} cy={c} color={LABEL_COLOR} labelSize={labelSize} />
-            <PlayPauseGlyph cx={c} cy={c + labelR} color={LABEL_COLOR} labelSize={labelSize} />
+            <PrevGlyph cx={c - labelR} cy={c} color={wheelTextColor} labelSize={labelSize} />
+            <NextGlyph cx={c + labelR} cy={c} color={wheelTextColor} labelSize={labelSize} />
+            <PlayPauseGlyph cx={c} cy={c + labelR} color={wheelTextColor} labelSize={labelSize} />
           </G>
         ) : null}
       </Svg>

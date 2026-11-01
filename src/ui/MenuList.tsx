@@ -5,9 +5,10 @@
  *
  * Each row is a fixed height so the window math is exact.
  *
- * The selected row is an authentic glossy iPod blue pill: a three-stop vertical
- * gradient, a 1px light top edge and a 1px dark bottom edge, drawn with
- * react-native-svg behind crisp white text. No Platform branching.
+ * The selected row is an authentic glossy iPod pill: a three-stop vertical
+ * gradient derived from the active theme's accent color, a 1px light top edge
+ * and a 1px dark bottom edge, drawn with react-native-svg behind crisp white
+ * text. No Platform branching.
  */
 
 import { memo } from 'react';
@@ -16,19 +17,14 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import { selectJumpLetter, useMenuStore, type Row } from '../nav/menuStack';
 import { MarqueeText } from './MarqueeText';
-import { fonts, spacing, type LcdPalette } from './theme';
+import { fonts, spacing, darkenHex, lightenHex, type LcdPalette } from './theme';
 
 /** Labels longer than this scroll instead of being truncated. */
 const MARQUEE_CHARS = 26;
 /** The A-Z jump HUD is a fixed square. */
 const JUMP_HUD_SIZE = 44;
 
-/** The iPod Classic selection blue, top to bottom. */
-const PILL_TOP = '#4F93F7';
-const PILL_MID = '#2971E7';
-const PILL_BOTTOM = '#1455C0';
 const PILL_TOP_HIGHLIGHT = 'rgba(255,255,255,0.45)';
-const PILL_BOTTOM_EDGE = '#0D3A88';
 const PILL_TEXT = '#FFFFFF';
 
 type Props = {
@@ -49,38 +45,57 @@ type RowViewProps = {
   rowHeight: number;
   width: number;
   palette: LcdPalette;
+  /** Accent used for the selection pill gradient. */
+  accent: string;
 };
 
 /**
- * The blue pill. Drawn as an absolutely-positioned SVG layer so the text above
- * it stays a plain <Text> with no gradient clipping quirks.
+ * The selection pill. Drawn as an absolutely-positioned SVG layer so the text
+ * above it stays a plain <Text> with no gradient clipping quirks. The three
+ * stops are derived from the theme accent (blue by default), so a custom theme
+ * recolors the pill with no extra plumbing.
  */
-function SelectionPill({ width, height }: { width: number; height: number }) {
+function SelectionPill({
+  width,
+  height,
+  accent,
+}: {
+  width: number;
+  height: number;
+  accent: string;
+}) {
   return (
     <Svg style={StyleSheet.absoluteFill} width={width} height={height}>
       <Defs>
-        <LinearGradient id="pillBlue" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0" stopColor={PILL_TOP} />
-          <Stop offset="0.5" stopColor={PILL_MID} />
-          <Stop offset="1" stopColor={PILL_BOTTOM} />
+        <LinearGradient id="pillAccent" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={lightenHex(accent, 0.18)} />
+          <Stop offset="0.5" stopColor={accent} />
+          <Stop offset="1" stopColor={darkenHex(accent, 0.22)} />
         </LinearGradient>
       </Defs>
-      <Rect x={0} y={0} width={width} height={height} fill="url(#pillBlue)" />
+      <Rect x={0} y={0} width={width} height={height} fill="url(#pillAccent)" />
       {/* 1px top highlight: the lit edge of a convex pill. */}
       <Rect x={0} y={0} width={width} height={1} fill={PILL_TOP_HIGHLIGHT} />
       {/* 1px bottom edge: the shadowed underside. */}
-      <Rect x={0} y={height - 1} width={width} height={1} fill={PILL_BOTTOM_EDGE} />
+      <Rect x={0} y={height - 1} width={width} height={1} fill={darkenHex(accent, 0.42)} />
     </Svg>
   );
 }
 
-const RowView = memo(function RowView({ row, selected, rowHeight, width, palette }: RowViewProps) {
+const RowView = memo(function RowView({
+  row,
+  selected,
+  rowHeight,
+  width,
+  palette,
+  accent,
+}: RowViewProps) {
   const textColor = selected ? PILL_TEXT : palette.text;
   const dimColor = selected ? PILL_TEXT : palette.textDim;
 
   return (
     <View style={[styles.row, { height: rowHeight, width }]}>
-      {selected ? <SelectionPill width={width} height={rowHeight} /> : null}
+      {selected ? <SelectionPill width={width} height={rowHeight} accent={accent} /> : null}
 
       <View style={styles.rowTextWrap}>
         {selected && row.label.length > MARQUEE_CHARS ? (
@@ -173,6 +188,7 @@ export function MenuList({
             rowHeight={rowHeight}
             width={width}
             palette={palette}
+            accent={palette.highlightBackground}
           />
         );
       })}

@@ -25,7 +25,14 @@ import { useLibraryStore } from '../library/store';
 import { setHapticsEnabled } from '../haptics/haptics';
 import { DebugOverlay } from './DebugOverlay';
 import { Screen } from './Screen';
-import { chassisPalettes, colors, layout, radii, spacing, wheel as wheelCfg } from './theme';
+import {
+  colors,
+  layout,
+  radii,
+  resolveAppTheme,
+  spacing,
+  wheel as wheelCfg,
+} from './theme';
 import { ClickWheel } from '../wheel/ClickWheel';
 import { useClickWheel } from '../wheel/useClickWheel';
 
@@ -56,7 +63,7 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
     return { screenWidth: sw, screenHeight: sh, wheelSize: wheel };
   }, [availableWidth, availableHeight]);
 
-  const { onStep, onTap, onMenuLongPress } = useWheelNav();
+  const { onStep, onTap, onMenuLongPress, onSeekStart, onSeekEnd } = useWheelNav();
 
   // Only the persisted settings object is subscribed here, and it changes when
   // the user edits a setting, never on a wheel step.
@@ -105,6 +112,19 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
     [onTap],
   );
 
+  // Fast-forward / rewind hold. Kept as stable wrappers for the memoized
+  // gestures, exactly like step/tap above.
+  const seekStart = useCallback(
+    (zone: 'next' | 'prev') => {
+      onSeekStart(zone);
+    },
+    [onSeekStart],
+  );
+
+  const seekEnd = useCallback(() => {
+    onSeekEnd();
+  }, [onSeekEnd]);
+
   const { gesture, debug } = useClickWheel({
     size: wheelSize,
     innerRatio: layout.wheelInnerRatio,
@@ -112,17 +132,19 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
     onStep: step,
     onTap: tap,
     onMenuLongPress,
+    onSeekStart: seekStart,
+    onSeekEnd: seekEnd,
   });
 
-  // Case finish. Subscribed through `settings`, so changing it in Settings
-  // tints the chassis and the Select button without a relaunch.
-  const chassis = chassisPalettes[settings?.caseColor ?? 'silver'];
+  // Active theme. Subscribed through `settings`, so changing it in Settings
+  // retints the shell, the wheel and the screen without a relaunch.
+  const appTheme = resolveAppTheme(settings?.themeId, settings?.customTheme);
 
   return (
     <View
       style={[
         styles.chassis,
-        { width: availableWidth, height: availableHeight, backgroundColor: chassis.chassis },
+        { width: availableWidth, height: availableHeight, backgroundColor: appTheme.shellColor },
       ]}
     >
       <View style={styles.stack}>
@@ -134,7 +156,7 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
             { width: screenWidth + spacing.bezelPadding * 2, borderRadius: radii.bezel },
           ]}
         >
-          <Screen width={screenWidth} height={screenHeight} />
+          <Screen width={screenWidth} height={screenHeight} appTheme={appTheme} />
         </View>
 
         <View style={{ height: layout.screenWheelGap }} />
@@ -144,7 +166,8 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
             <ClickWheel
               size={wheelSize}
               innerRatio={layout.wheelInnerRatio}
-              center={{ light: chassis.centerLight, dark: chassis.centerDark }}
+              wheelColor={appTheme.wheelColor}
+              wheelTextColor={appTheme.wheelTextColor}
             />
           </View>
         </GestureDetector>

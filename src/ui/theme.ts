@@ -34,7 +34,25 @@ export const wheel = {
  * Color LCD palettes. "color" is the figPod colour-LCD look: white screen,
  * black text, iPod Classic blue highlight. Kept as a palette map so a theme
  * swap needs no per-component changes.
+ *
+ * This is a structural type (not the literal type of the map) so `Screen` can
+ * derive a palette by overriding `highlightBackground`/`progressFill` with the
+ * active theme's accent color without losing assignability.
  */
+export type LcdPalette = {
+  background: string;
+  border: string;
+  text: string;
+  textDim: string;
+  highlightBackground: string;
+  highlightText: string;
+  scrollbarTrack: string;
+  scrollbarThumb: string;
+  titleBarBorder: string;
+  progressTrack: string;
+  progressFill: string;
+};
+
 export const lcdPalettes = {
   color: {
     background: '#FFFFFF',
@@ -63,10 +81,9 @@ export const lcdPalettes = {
     progressTrack: '#E0E2E8',
     progressFill: '#1E69DE',
   },
-} as const;
+} as const satisfies Record<string, LcdPalette>;
 
 export type LcdPaletteName = keyof typeof lcdPalettes;
-export type LcdPalette = (typeof lcdPalettes)[LcdPaletteName];
 
 export const DEFAULT_LCD_PALETTE: LcdPaletteName = 'color';
 
@@ -173,6 +190,12 @@ export function resolveAppTheme(
   };
 }
 
+/**
+ * The resolved default preset. A module-level constant (not a call per render)
+ * so it can be used as a stable component default without breaking memoization.
+ */
+export const DEFAULT_APP_THEME: AppThemeConfig = resolveAppTheme(DEFAULT_THEME_ID, null);
+
 // --- theme fields + swatches (for Settings > Themes > Custom) ---------------
 
 export type ThemeField =
@@ -246,6 +269,22 @@ export function lightenHex(hex: string, t: number): string {
 
 export function darkenHex(hex: string, t: number): string {
   return mixHex(hex, '#000000', t);
+}
+
+/**
+ * Perceived brightness of a #rrggbb color, 0 (black) .. 1 (white).
+ * Rec. 601 weights: good enough for picking readable ink and sheen strength.
+ */
+export function hexLuminance(hex: string): number {
+  const r = channel(hex, 0) / 255;
+  const g = channel(hex, 1) / 255;
+  const b = channel(hex, 2) / 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+/** True when light ink is the readable choice on top of `hex`. */
+export function isDarkHex(hex: string): boolean {
+  return hexLuminance(hex) < 0.55;
 }
 
 export const colors = {
@@ -329,6 +368,16 @@ export const timing = {
   marqueePauseMs: 1200,
   /** Pixels per second for the marquee scroll. */
   marqueeSpeed: 26,
+  /** Hold this long on Next/Prev before fast-forward/rewind starts. */
+  seekHoldMs: 350,
+  /** Repeat interval of the seek loop while the wheel button is held. */
+  seekRepeatMs: 200,
+  /** Milliseconds jumped per repeat during the first 2 s of a hold. */
+  seekStepMs: 3000,
+  /** Milliseconds jumped per repeat after the hold has lasted 2 s. */
+  seekStepFastMs: 6000,
+  /** Hold duration after which the seek step doubles. */
+  seekAccelAfterMs: 2000,
 } as const;
 
 export type Theme = {

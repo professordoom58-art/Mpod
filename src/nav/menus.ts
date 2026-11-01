@@ -23,10 +23,12 @@ import {
   WHEEL_TICK_MIN,
   loadPlaybackSession,
   loadSettings,
-  setCaseColor,
   setHapticsEnabled as persistHaptics,
   setMinTrackLengthMs,
+  setThemeId,
+  setThemeOverrides,
   setWheelTickDeg,
+  type Settings,
 } from '../library/settings';
 import { useLibraryStore } from '../library/store';
 import type { Track } from '../library/types';
@@ -36,7 +38,17 @@ import {
   shuffleAndPlay,
 } from '../player/playback';
 import { usePlayerStore } from '../player/store';
-import { CHASSIS_COLOR_ORDER, chassisPalettes } from '../ui/theme';
+import {
+  COLOR_SWATCHES,
+  GRADIENT_SWATCHES,
+  THEME_FIELDS,
+  THEME_ORDER,
+  resolveAppTheme,
+  themePresets,
+  type AppThemeConfig,
+  type ThemeField,
+  type ThemeOverrides,
+} from '../ui/theme';
 import { useMenuStore, type Row } from './menuStack';
 
 const isAndroid = Platform.OS === 'android';
@@ -158,12 +170,12 @@ function settingsRows(): Row[] {
   });
 
   rows.push({
-    id: 'case-color',
-    label: 'Case Color',
+    id: 'themes',
+    label: 'Themes',
     chevron: true,
-    sub: chassisPalettes[useLibraryStore.getState().settings?.caseColor ?? 'silver'].label,
+    sub: activeThemeLabel(),
     onSelect: () => {
-      fireAndForget(pushCaseColor());
+      fireAndForget(pushThemes());
     },
   });
 
@@ -362,35 +374,144 @@ async function pushHaptics(): Promise<void> {
   });
 }
 
-/** Case finishes, persisted in the settings table and applied live. */
-async function pushCaseColor(): Promise<void> {
-  const settings = await loadSettings();
-  const items: Row[] = CHASSIS_COLOR_ORDER.map((key) => {
-    const palette = chassisPalettes[key];
-    return {
-      id: `case-${key}`,
-      label: palette.label,
-      sub: settings.caseColor === key ? 'Selected' : undefined,
-      onSelect: () => {
-        fireAndForget(
-          (async () => {
-            await setCaseColor(key);
-            const next = await loadSettings();
-            useLibraryStore.getState().setSettings(next);
-            useMenuStore.getState().pop();
-            useMenuStore.getState().setStatus(`Case: ${palette.label}`);
-          })(),
-        );
-      },
-    };
+/** Short label for the Settings row: the active preset, or "Custom". */
+function activeThemeLabel(): string {
+  const settings = useLibraryStore.getState().settings;
+  return resolveAppTheme(settings?.themeId, settings?.customTheme).label;
+}
+
+/** Human label for a field's current value (swatch name, or "Custom"). */
+function themeFieldValueLabel(resolved: AppThemeConfig, key: ThemeField): string {
+  const value = resolved[key];
+  if (key === 'screenBgGradient') {
+    const grad = value as readonly [string, string];
+    const found = GRADIENT_SWATCHES.find(
+      (g) => g.value.join('|').toLowerCase() === grad.join('|').toLowerCase(),
+    );
+    return found ? found.label : 'Custom';
+  }
+  const found = COLOR_SWATCHES.find(
+    (c) => c.value.toLowerCase() === String(value).toLowerCase(),
+  );
+  return found ? found.label : 'Custom';
+}
+
+/**
+ * Builds the Themes submenu rows from the current settings. Presets set the
+ * whole palette; "Custom Colors" toggles per-field overrides that cycle through
+ * swatches on Select (no color picker needed).
+ */
+function buildThemeRows(s: Settings): Row[] {
+  const resolved = resolveAppTheme(s.themeId, s.customTheme);
+  const custom = s.customTheme != null;
+
+  const rows: Row[] = THEME_ORDER.map((id) => ({
+    id: `theme-${id}`,
+    label: themePresets[id].label,
+    sub: !custom && s.themeId === id ? 'Selected' : undefined,
+    onSelect: () => {
+      fireAndForget(
+        (async () => {
+          await setThemeId(id);
+          await setThemeOverrides(null);
+          useLibraryStore.getState().setSettings(await loadSettings());
+          useMenuStore.getState().pop();
+          useMenuStore.getState().setStatus(`Theme: ${themePresets[id].label}`);
+        })(),
+      );
+    },
+  }));
+
+  rows.push({
+    id: 'theme-custom',
+    label: 'Custom Colors',
+    sub: custom ? 'On' : 'Off',
+    onSelect: () => {
+      fireAndForget(
+        (async () => {
+          const current = await loadSettings();
+          if (current.customTheme) {
+            await setThemeOverrides(null);
+          } else {
+            // Seed overrides from the resolved preset so cycling starts from
+            // the exact look currently on screen.
+            const seed = resolveAppTheme(current.themeId, null);
+            await setThemeOverrides({
+              shellColor: seed.shellColor,
+              wheelColor: seed.wheelColor,
+              wheelTextColor: seed.wheelTextColor,
+              screenBgGradient: seed.screenBgGradient,
+              accentColor: seed.accentColor,
+            });
+          }
+          useLibraryStore.getState().setSettings(await loadSettings());
+          refreshThemesFrame();
+        })(),
+      );
+    },
   });
 
+  if (custom) {
+    for (const field of THEME_FIELDS) {
+      rows.push({
+        id: `theme-field-${field.key}`,
+        label: field.label,
+        sub: themeFieldValueLabel(resolved, field.key),
+        onSelect: () => {
+          fireAndForget(cycleThemeField(field.key));
+        },
+      });
+    }
+  }
+
+  return rows;
+}
+
+/** Advances one custom field to the next swatch and repaints live. */
+async function cycleThemeField(field: ThemeField): Promise<void> {
+  const s = await loadSettings();
+  const resolved = resolveAppTheme(s.themeId, s.customTheme);
+  const next: ThemeOverrides = { ...(s.customTheme ?? {}) };
+
+  if (field === 'screenBgGradient') {
+    const key = resolved.screenBgGradient.join('|').toLowerCase();
+    const i = GRADIENT_SWATCHES.findIndex((g) => g.value.join('|').toLowerCase() === key);
+    const pick = GRADIENT_SWATCHES[(i + 1) % GRADIENT_SWATCHES.length];
+    next.screenBgGradient = [pick.value[0], pick.value[1]];
+  } else {
+    const colorField = field as Exclude<ThemeField, 'screenBgGradient'>;
+    const cur = resolved[colorField].toLowerCase();
+    const i = COLOR_SWATCHES.findIndex((c) => c.value.toLowerCase() === cur);
+    next[colorField] = COLOR_SWATCHES[(i + 1) % COLOR_SWATCHES.length].value;
+  }
+
+  await setThemeOverrides(next);
+  useLibraryStore.getState().setSettings(await loadSettings());
+  refreshThemesFrame();
+}
+
+/** Rebuilds the top frame in place when it is the Themes screen. */
+function refreshThemesFrame(): void {
+  fireAndForget(
+    (async () => {
+      const stack = useMenuStore.getState().stack;
+      const top = stack[stack.length - 1];
+      if (top?.id === 'themes') {
+        useMenuStore.getState().replaceTopItems(buildThemeRows(await loadSettings()));
+      }
+    })(),
+  );
+}
+
+/** Settings > Themes. Persisted and applied live via the library store. */
+async function pushThemes(): Promise<void> {
+  const settings = await loadSettings();
   useMenuStore.getState().push({
-    id: 'case-color',
-    title: 'Case Color',
+    id: 'themes',
+    title: 'Themes',
     kind: 'settings',
-    items,
-    initialIndex: Math.max(0, CHASSIS_COLOR_ORDER.indexOf(settings.caseColor)),
+    items: buildThemeRows(settings),
+    initialIndex: Math.max(0, THEME_ORDER.indexOf(settings.themeId)),
   });
 }
 
@@ -537,8 +658,8 @@ function pushArtist(name: string): void {
 function pushAlbums(): void {
   useMenuStore.getState().push({
     id: 'albums',
-    title: 'Albums',
-    kind: 'list',
+    title: 'Cover Flow',
+    kind: 'coverflow',
     loader: async () => {
       const albums = await getAlbums();
       if (albums.length === 0) return [emptyLibraryRow()];
@@ -546,7 +667,7 @@ function pushAlbums(): void {
         id: `album:${a.name}:${a.artist}`,
         label: a.name,
         sub: a.artist,
-        chevron: true,
+        artworkPath: a.artworkPath,
         onSelect: () => pushAlbum(a.name, a.artist),
       }));
     },
@@ -600,7 +721,7 @@ function pushMusic(): void {
     items: [
       { id: 'playlists', label: 'Playlists', chevron: true, onSelect: pushPlaylists },
       { id: 'artists', label: 'Artists', chevron: true, onSelect: pushArtists },
-      { id: 'albums', label: 'Albums', chevron: true, onSelect: pushAlbums },
+      { id: 'albums', label: 'Cover Flow', chevron: true, onSelect: pushAlbums },
       { id: 'songs', label: 'Songs', chevron: true, onSelect: pushSongs },
     ],
   });

@@ -83,13 +83,12 @@ const ROOT_BLOCK_LINES = `  ${BEGIN} ${ROOT_SUFFIX}${ROOT_BODY}  ${END}`;
 // ROOT_BLOCK_LINES so replacing an existing copy reproduces the same output.
 const ROOT_INSERT = `\n\n${ROOT_BLOCK_LINES}`;
 
-// Body only: the begin/end markers wrap the surrounding `configurations`
-// block so that findBlock sees a properly nested pair. One preceding newline
-// only: re-running must reproduce the same bytes (see applyRetrieverKotlinPin).
-const RETRIEVER_CONSTRAINT = `
-      constraints {
-        add('implementation', "org.jetbrains.kotlin:kotlin-stdlib:\${rootProject.ext.kotlinVersion}")
-      }`;
+// Statement inserted under the retriever markers. One preceding newline only:
+// re-running must reproduce the same bytes (see applyRetrieverKotlinPin).
+// `DependencyConstraintSet.add` needs a DependencyConstraint, not a notation
+// string, so it goes through the project's dependency handler.
+const RETRIEVER_CONSTRAINT =
+  `prj.dependencies.constraints.add('implementation', "org.jetbrains.kotlin:kotlin-stdlib:\${rootProject.ext.kotlinVersion}".toString())`;
 
 
 
@@ -167,18 +166,21 @@ function findBlockEnd(contents, from) {
  * Replaces an existing block (idempotent). Exported for tests.
  */
 function applyRetrieverKotlinPin(contents) {
-  // The retriever module is contributed by React Native autolinking, so no
-  // plugin in settings.gradle is guaranteed to own it: hook configuration from
-  // the root project instead. `withDependencies` runs when the configuration
-  // resolves, so the project only has to exist by then (it does, at apply time).
+  // The retriever module comes from React Native autolinking, so nothing in
+  // settings.gradle owns it: configure it from the root project.
   //
   // Why: the fork's media3-common POM carries `kotlin-bom:1.8.0`, whose strict
   // alignment drops kotlin-stdlib to 1.8.0 inside the retriever module; the
   // module then fails to build against the Kotlin 2.x toolchain (AGP 9).
+  // Declared once, right after the retriever project is evaluated: by then its
+  // `implementation` configuration exists and `expo-root-project` (applied at the
+  // bottom of this file) has set `kotlinVersion`. Constraints may still be added
+  // at this point, unlike dependencies (adding from `withDependencies` mutates
+  // `implementation` after its children were observed, which Gradle rejects).
   const snippet =
     `  ${RETRIEVER_BEGIN}` +
-    `\n  project(':${RETRIEVER_PROJECT}').configurations.configureEach {` +
-    `\n    withDependencies {${RETRIEVER_CONSTRAINT}\n    }\n  }\n` +
+    `\n  project(':${RETRIEVER_PROJECT}').afterEvaluate { prj ->` +
+    `\n    ${RETRIEVER_CONSTRAINT}\n  }\n` +
     `  ${RETRIEVER_END}`;
 
   const anchor = 'allprojects {';

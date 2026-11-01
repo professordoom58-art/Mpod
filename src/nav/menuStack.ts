@@ -18,7 +18,9 @@ export type FrameKind =
   | 'progress'
   | 'message'
   | 'nowplaying'
-  | 'settings';
+  | 'settings'
+  /** 3D Cover Flow carousel (Albums). */
+  | 'coverflow';
 
 export type Row = {
   id: string;
@@ -26,6 +28,8 @@ export type Row = {
   sub?: string;
   chevron?: boolean;
   disabled?: boolean;
+  /** Album art for cover-flow rows, relative to the document directory. */
+  artworkPath?: string;
   onSelect?: () => void;
 };
 

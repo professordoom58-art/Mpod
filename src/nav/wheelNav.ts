@@ -5,7 +5,21 @@
  * Select -> run the selected row's onSelect.
  * Menu   -> pop one frame.
  * Long-press Menu -> pop to root.
- * Next/Prev/Play -> player store stubs.
+ * Next/Prev tap  -> player next/prev.
+ * Next/Prev hold -> fast-forward / rewind inside the current track.
+ * Play   -> player togglePlay.
+ *
+ * Fast-forward / rewind (Feature 2):
+ *   - the gesture layer reports only "hold started" and "released";
+ *   - the repeat loop lives here, on the JS thread, because timers cannot run
+ *     in a Reanimated worklet;
+ *   - one tick every `timing.seekRepeatMs` (200 ms), jumping `seekStepMs` (3 s)
+ *     for the first `seekAccelAfterMs` (2 s) of the hold and `seekStepFastMs`
+ *     (6 s) after that;
+ *   - release clears the interval immediately and never advances the queue.
+ *
+ * The loop state is module-level on purpose: it is input timing, not render
+ * state, and it must not cause a re-render when it starts or stops.
  */
 
 import { useCallback } from 'react';
@@ -13,7 +27,8 @@ import { useCallback } from 'react';
 import { bounce, click, tick } from '../haptics/haptics';
 import { getSelectedRow, useMenuStore } from '../nav/menuStack';
 import { usePlayerStore } from '../player/store';
-import type { Zone } from '../wheel/useClickWheel';
+import { timing } from '../ui/theme';
+import type { SeekZone, Zone } from '../wheel/useClickWheel';
 
 /** One wheel step changes volume by this fraction (0.0..1.0). */
 const VOLUME_STEP = 0.05;
@@ -33,6 +48,11 @@ const ALPHABETICAL_FRAME_IDS = new Set(['songs', 'artists', 'albums']);
  */
 let lastStepAt = 0;
 let fastRun = 0;
+
+/** Active seek loop. null when the wheel buttons are not being held. */
+let seekTimer: ReturnType<typeof setInterval> | null = null;
+/** Where the seek loop has got to, so it does not fight the 4 Hz status tick. */
+let seekTargetMs = 0;
 
 /**
  * Returns how many rows this tick should move. A spinner (< 40 ms between
@@ -59,6 +79,57 @@ function stepMultiplier(now: number, itemCount: number): number {
 function jumpLetterFor(label: string): string {
   const first = label.trim().charAt(0).toUpperCase();
   return first >= 'A' && first <= 'Z' ? first : '#';
+}
+
+/** Cancels a running seek loop. Safe to call when nothing is running. */
+function stopSeek(): void {
+  if (seekTimer !== null) {
+    clearInterval(seekTimer);
+    seekTimer = null;
+  }
+}
+
+/**
+ * Starts the fast-forward (next) / rewind (prev) loop.
+ *
+ * The accumulator is seeded from the store's position and then advanced
+ * locally, so a lagging 250 ms status update cannot make the seek stutter or
+ * jump backwards. Every repeat is clamped to [0, duration].
+ */
+function startSeek(zone: SeekZone): void {
+  stopSeek();
+
+  const player = usePlayerStore.getState();
+  if (!player.current) return;
+
+  // One click at the moment the hold becomes a seek, like the real wheel.
+  click();
+
+  const dir: 1 | -1 = zone === 'next' ? 1 : -1;
+  const startedAt = Date.now();
+  seekTargetMs = player.positionMs;
+
+  seekTimer = setInterval(() => {
+    const s = usePlayerStore.getState();
+    if (!s.current) {
+      stopSeek();
+      return;
+    }
+
+    const heldMs = Date.now() - startedAt;
+    const step =
+      heldMs >= timing.seekAccelAfterMs ? timing.seekStepFastMs : timing.seekStepMs;
+    const limit = s.durationMs > 0 ? s.durationMs : Number.POSITIVE_INFINITY;
+
+    seekTargetMs = Math.max(0, Math.min(limit, seekTargetMs + dir * step));
+    s.seek(seekTargetMs);
+    tick();
+
+    // Nothing left to seek to at either end of the track.
+    if (seekTargetMs <= 0 || (Number.isFinite(limit) && seekTargetMs >= limit)) {
+      stopSeek();
+    }
+  }, timing.seekRepeatMs);
 }
 
 export function useWheelNav() {
@@ -112,12 +183,26 @@ export function useWheelNav() {
         menu.pop();
         break;
       }
+      // On Cover Flow the side buttons step through albums instead of
+      // skipping tracks, like the real device.
       case 'next': {
+        if (menu.stack[menu.stack.length - 1]?.kind === 'coverflow') {
+          const result = menu.moveSelectionBy(1, 1);
+          if (result === 'moved') tick();
+          else bounce();
+          break;
+        }
         click();
         player.next();
         break;
       }
       case 'prev': {
+        if (menu.stack[menu.stack.length - 1]?.kind === 'coverflow') {
+          const result = menu.moveSelectionBy(-1, 1);
+          if (result === 'moved') tick();
+          else bounce();
+          break;
+        }
         click();
         player.prev();
         break;
@@ -137,5 +222,15 @@ export function useWheelNav() {
     useMenuStore.getState().popToRoot();
   }, []);
 
-  return { onStep, onTap, onMenuLongPress };
+  // Hold NEXT/PREV: start the seek loop. The gesture layer guarantees a tap
+  // and a hold are mutually exclusive, so no track skip follows a hold.
+  const onSeekStart = useCallback((zone: SeekZone) => {
+    startSeek(zone);
+  }, []);
+
+  const onSeekEnd = useCallback(() => {
+    stopSeek();
+  }, []);
+
+  return { onStep, onTap, onMenuLongPress, onSeekStart, onSeekEnd };
 }
