@@ -8,8 +8,9 @@
  *   4. footer          — audio-output route bottom-left, nothing bottom-right
  *
  * The whole background is a vertical gradient taken from the active
- * AppThemeConfig (warm matte #5C5855 -> #45423F -> #363330 by default), so
- * switching theme in Settings > Themes repaints this screen without a relaunch.
+ * AppThemeConfig (the reference warm matte #5C5855 -> #464340 -> #35322F by
+ * default), so switching theme in Settings > Themes repaints this screen
+ * without a relaunch.
  *
  * PERFORMANCE CONTRACT (unchanged from the previous implementation):
  *   - <NowPlaying /> subscribes only to queue/index/current, so the artwork
@@ -24,19 +25,27 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import Svg, { Defs, G, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
+import Svg, { Defs, Ellipse, G, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 
 import { click } from '../haptics/haptics';
+import type { NowPlayingLayout } from '../library/settings';
 import { resolveArtworkUri } from '../library/resolveUri';
 import { usePlayerStore } from '../player/store';
-import { darkenHex, mixHex, type AppThemeConfig } from './theme';
+import { darkenHex, mixHex, radii, type AppThemeConfig } from './theme';
 
 type Props = {
   width: number;
   height: number;
   /** Active app theme: drives the background gradient and the fallback cover. */
   theme: AppThemeConfig;
+  /** Settings > Now Playing Style. `split` is the 2-column concept layout. */
+  layout?: NowPlayingLayout;
 };
+
+/** figPod full-bleed design: status band, full-width art, matte metadata bar. */
+const FULL_STATUS_H = 24;
+/** Fraction of the LCD height the artwork fills. */
+const FULL_ART_RATIO = 0.74;
 
 /** Fixed bands of the screen, in points. */
 const STATUS_H = 28;
@@ -48,8 +57,8 @@ const PAD_V = 14;
 const SCRUB_MT = 14;
 /** Artwork corner radius, per the concept (10dp). */
 const ART_RADIUS = 10;
-/** Artwork edge as a fraction of the inner screen width. */
-const ART_RATIO = 0.44;
+/** Artwork edge as a fraction of the padded inner screen width. */
+const ART_RATIO = 0.46;
 /** How long the volume HUD stays visible after the last change. */
 const VOLUME_HUD_MS = 1800;
 /** Hard ceiling for a formatted timestamp, so garbage never renders "83:11:47". */
@@ -57,9 +66,9 @@ const MAX_TIME_MS = 24 * 60 * 60 * 1000;
 
 /** Ink levels used by the metadata column. */
 const TITLE_INK = '#FFFFFF';
-const ARTIST_INK = 'rgba(255,255,255,0.78)';
-const ALBUM_INK = 'rgba(255,255,255,0.62)';
-const COUNTER_INK = 'rgba(255,255,255,0.62)';
+const ARTIST_INK = 'rgba(255,255,255,0.8)';
+const ALBUM_INK = 'rgba(255,255,255,0.6)';
+const COUNTER_INK = 'rgba(255,255,255,0.6)';
 const TIME_INK = 'rgba(255,255,255,0.65)';
 const ROUTE_INK = 'rgba(255,255,255,0.92)';
 const TRACK_INK = 'rgba(255,255,255,0.25)';
@@ -170,19 +179,16 @@ function BatteryIcon({ level = 0.8 }: { level?: number }) {
   );
 }
 
-/** Headphone glyph for the audio-output footer. */
-function HeadphonesIcon({ color }: { color: string }) {
+/** AirPods-style double-earbud glyph for the audio-output footer. */
+function EarbudsIcon({ color }: { color: string }) {
   return (
     <Svg width={18} height={18} viewBox="0 0 18 18">
-      <Path
-        d="M2.4 11.6 V9.4 a6.6 6.6 0 0 1 13.2 0 V11.6"
-        stroke={color}
-        strokeWidth={1.8}
-        fill="none"
-        strokeLinecap="round"
-      />
-      <Rect x={0.9} y={10.4} width={3.2} height={5.1} rx={1.5} fill={color} />
-      <Rect x={13.9} y={10.4} width={3.2} height={5.1} rx={1.5} fill={color} />
+      {/* Left bud */}
+      <Ellipse cx={5.4} cy={5} rx={2.5} ry={2.9} fill={color} />
+      <Rect x={4.45} y={7} width={1.9} height={6} rx={0.95} fill={color} />
+      {/* Right bud */}
+      <Ellipse cx={12.6} cy={5} rx={2.5} ry={2.9} fill={color} />
+      <Rect x={11.65} y={7} width={1.9} height={6} rx={0.95} fill={color} />
     </Svg>
   );
 }
@@ -316,23 +322,25 @@ function VolumeHud() {
   );
 }
 
-export function NowPlaying({ width, height, theme }: Props) {
+function SplitNowPlaying({ width, height, theme }: Omit<Props, 'layout'>) {
   const queue = usePlayerStore((s) => s.queue);
   const index = usePlayerStore((s) => s.index);
   const current = usePlayerStore((s) => s.current);
 
   const artworkUri = resolveArtworkUri(current?.artworkPath);
 
-  // 44% of the inner screen width: the content row is the only flexible band,
-  // so the artwork scales with the LCD instead of wasting a fixed size.
+  // 46% of the padded inner screen width: the content row is the only flexible
+  // band, so the artwork scales with the LCD instead of wasting a fixed size.
   const innerWidth = Math.max(0, width - PAD_H * 2);
   const artSize = Math.max(72, innerWidth * ART_RATIO);
 
-  // Theme drives the gradient; the middle stop is interpolated so the warm matte
-  // surfaces reads as a smooth three-stop vignette rather than a flat ramp.
-  const gradTop = theme.screenBgGradient[0];
-  const gradBottom = theme.screenBgGradient[1];
-  const gradMid = mixHex(gradTop, gradBottom, 0.5);
+  // Theme drives the gradient. Presets may define three stops (the default
+  // warm matte does); two-stop presets keep a computed middle.
+  const stops = theme.screenBgGradient;
+  const gradTop = stops[0];
+  const gradBottom = stops[stops.length - 1] as string;
+  const gradMid =
+    stops.length === 3 ? (stops[1] as string) : mixHex(gradTop, gradBottom, 0.5);
 
   return (
     <View style={[styles.wrap, { width, height }]}>
@@ -375,8 +383,8 @@ export function NowPlaying({ width, height, theme }: Props) {
           </View>
 
           <View style={[styles.meta, { height: artSize }]}>
-            {/* Text block is centred against the upper 75% of the artwork. */}
-            <View style={[styles.metaText, { height: artSize * 0.75 }]}>
+            {/* Text stack pinned to the top of the artwork. */}
+            <View>
               <Text numberOfLines={1} ellipsizeMode="tail" style={styles.title}>
                 {current?.title ?? 'No track'}
               </Text>
@@ -392,7 +400,6 @@ export function NowPlaying({ width, height, theme }: Props) {
               </Text>
             </View>
 
-            <View style={styles.metaSpacer} />
             <View style={styles.moreSlot}>
               <MoreButton />
             </View>
@@ -405,7 +412,7 @@ export function NowPlaying({ width, height, theme }: Props) {
         {/* 4. Footer: audio route left, deliberately empty right. */}
         <View style={[styles.footer, { height: FOOTER_H }]}>
           <View style={styles.route}>
-            <HeadphonesIcon color={ROUTE_INK} />
+            <EarbudsIcon color={ROUTE_INK} />
             <Text style={styles.routeText}>Headphones</Text>
           </View>
         </View>
@@ -416,9 +423,153 @@ export function NowPlaying({ width, height, theme }: Props) {
   );
 }
 
+/**
+ * figPod full-bleed layout (Reference 3): artwork edge-to-edge across the top
+ * ~74%, a translucent status band on top of it, and a dark matte metadata bar
+ * filling the bottom ~26% with centred title / artist / track counter.
+ */
+function FullArtNowPlaying({ width, height, theme }: Omit<Props, 'layout'>) {
+  const queue = usePlayerStore((s) => s.queue);
+  const index = usePlayerStore((s) => s.index);
+  const current = usePlayerStore((s) => s.current);
+
+  const artworkUri = resolveArtworkUri(current?.artworkPath);
+  const artHeight = Math.round(height * FULL_ART_RATIO);
+  const barHeight = Math.max(0, height - artHeight);
+
+  return (
+    <View style={{ width, height, backgroundColor: '#141414' }}>
+      {/* Full-bleed artwork across the top of the LCD. */}
+      <View style={{ width, height: artHeight, overflow: 'hidden' }}>
+        {current && artworkUri ? (
+          <Image
+            source={{ uri: artworkUri }}
+            style={{ width, height: artHeight }}
+            resizeMode="cover"
+          />
+        ) : (
+          <FallbackCover size={width} accent={theme.accentColor} />
+        )}
+      </View>
+
+      {/* Top status band, translucent over the artwork. */}
+      <View style={[styles.fullStatus, { height: FULL_STATUS_H }]}>
+        <Text numberOfLines={1} style={styles.fullStatusTitle}>
+          Now playing
+        </Text>
+        <View style={styles.fullStatusRight}>
+          <TransportIcon />
+          <BatteryIcon level={1} />
+        </View>
+      </View>
+
+      {/* Bottom matte metadata bar. */}
+      <View style={[styles.fullBar, { top: artHeight, height: barHeight }]}>
+        <Svg style={StyleSheet.absoluteFill} width={width} height={barHeight}>
+          <Defs>
+            <LinearGradient id="npFullBar" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor="#232323" stopOpacity={0.92} />
+              <Stop offset="1" stopColor="#121212" stopOpacity={0.98} />
+            </LinearGradient>
+          </Defs>
+          <Rect x={0} y={0} width={width} height={barHeight} fill="url(#npFullBar)" />
+        </Svg>
+
+        <View style={styles.fullMeta}>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.fullTitle}>
+            {current?.title ?? 'No track'}
+          </Text>
+          <Text numberOfLines={1} ellipsizeMode="tail" style={styles.fullArtist}>
+            {current?.artist ?? ''}
+          </Text>
+          <Text numberOfLines={1} style={styles.fullCounter}>
+            {queue.length > 0 ? `${index + 1}/${queue.length}` : ''}
+          </Text>
+        </View>
+      </View>
+
+      <VolumeHud />
+    </View>
+  );
+}
+
+/**
+ * Dispatches between the two Now Playing designs. Kept hook-free so switching
+ * the setting never changes hook order inside either layout.
+ */
+export function NowPlaying({ layout = 'split', ...rest }: Props) {
+  return layout === 'full' ? (
+    <FullArtNowPlaying {...rest} />
+  ) : (
+    <SplitNowPlaying {...rest} />
+  );
+}
+
 const styles = StyleSheet.create({
   wrap: {
+    // Own radius as well as the LCD parent's clip, so the full-bleed gradient
+    // cannot paint a square corner even if a platform ignores parent clipping.
+    borderRadius: radii.screen,
     overflow: 'hidden',
+  },
+
+  // --- figPod full-bleed layout -------------------------------------------
+  fullStatus: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(25,25,25,0.75)',
+  },
+  fullStatusTitle: {
+    flex: 1,
+    textAlign: 'center',
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  fullStatusRight: {
+    position: 'absolute',
+    right: 10,
+    top: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  fullBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    overflow: 'hidden',
+  },
+  fullMeta: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  fullTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  fullArtist: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 13,
+    marginTop: 3,
+    textAlign: 'center',
+  },
+  fullCounter: {
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
   },
   /** Inner padding band: 18 dp horizontal, 14 dp vertical. */
   content: {
@@ -470,16 +621,15 @@ const styles = StyleSheet.create({
   meta: {
     flex: 1,
     marginLeft: 16,
-    justifyContent: 'flex-start',
-  },
-  metaText: {
-    justifyContent: 'center',
+    // Exact artwork height, so the text stack top-aligns with the cover and
+    // the circular More button sits flush with the artwork's bottom edge.
+    justifyContent: 'space-between',
   },
   title: {
     color: TITLE_INK,
-    fontSize: 21,
+    fontSize: 20,
     fontWeight: '700',
-    lineHeight: 25,
+    lineHeight: 24,
   },
   artist: {
     color: ARTIST_INK,
@@ -489,19 +639,16 @@ const styles = StyleSheet.create({
   },
   album: {
     color: ALBUM_INK,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '400',
     marginTop: 3,
   },
   counter: {
     color: COUNTER_INK,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '500',
     marginTop: 6,
     fontVariant: ['tabular-nums'],
-  },
-  metaSpacer: {
-    flex: 1,
   },
   moreSlot: {
     alignSelf: 'flex-end',

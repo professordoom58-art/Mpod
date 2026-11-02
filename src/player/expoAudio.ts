@@ -110,6 +110,51 @@ export class ExpoAudioEngine implements PlayerEngine {
   }
 
   /**
+   * Points the lock screen / media notification at `track`.
+   *
+   * MUST stay non-fatal. Playback is already running when this is called, and
+   * there are two independent failure modes:
+   *
+   *  - Native binding failures (service absent from the merged manifest, bind
+   *    refused, service died) are reported by expo-audio through `jsLogger`
+   *    and are never thrown, so they cannot interrupt playback by themselves.
+   *    See expo.modules.audio.service.AudioPlaybackServiceConnection /
+   *    BaseServiceConnection.
+   *  - A Kotlin exception that DOES cross the bridge — AppContextLost from the
+   *    service connection, an unreadable/invalid artwork uri, a missing
+   *    native module in an old dev client — arrives here as a JS throw. This
+   *    method owns that catch so the audio started by startCurrent() keeps
+   *    playing through the speakers/headphones.
+   *
+   * Activate once, then update: `setActiveForLockScreen` re-arms
+   * AudioControlsService.setPlayableOptions, which RELEASES and rebuilds the
+   * MediaSession when the playable is already current. Calling it per track
+   * would tear the notification down and rebuild it on every song, so the
+   * lighter `updateLockScreenMetadata` is used from the second track on.
+   *
+   * Known consequence: if the very first bind fails, `lockScreenActive` is
+   * latched true anyway (the native call reports success even when the async
+   * bind did not complete), so later tracks only log "service not connected"
+   * and do not retry. Audio is unaffected; the flag resets in dispose().
+   */
+  private updateLockScreen(player: AudioPlayer, track: Track): void {
+    try {
+      const metadata = lockScreenMetadata(track);
+      if (!this.lockScreenActive) {
+        player.setActiveForLockScreen(true, metadata);
+        this.lockScreenActive = true;
+      } else {
+        player.updateLockScreenMetadata(metadata);
+      }
+    } catch (e) {
+      // Deliberately not latching on failure: a throw during the first
+      // activation leaves lockScreenActive false so the next track retries
+      // instead of losing lock-screen controls for the whole session.
+      console.error('[player] lock screen update failed (audio unaffected)', e);
+    }
+  }
+
+  /**
    * Swaps the current source and starts playing. Wrapped in try/catch because
    * a failed source (e.g. an unreadable content:// uri) must never abort a
    * scan or take down the JS thread.
@@ -123,29 +168,13 @@ export class ExpoAudioEngine implements PlayerEngine {
       player.replace({ uri: resolveTrackUri(track) });
       player.volume = this.volume;
       this.wantsPlay = true;
+      // Playback first. Everything after this line is accessory (lock screen,
+      // media notification, and on Android the media session that keeps
+      // background playback alive past ~3 minutes) and is isolated so it can
+      // never prevent or interrupt the audio that is already running.
       player.play();
-
-      // Lock-screen controls. On Android this is also what keeps background
-      // playback alive past ~3 minutes (OS limitation without an active
-      // media session). Wrapped separately so a lock-screen failure can never
-      // stop audio from playing.
-      //
-      // Activate once, then update: setActiveForLockScreen registers the media
-      // session, updateLockScreenMetadata just swaps the text/artwork on the
-      // session that already exists.
-      try {
-        const metadata = lockScreenMetadata(track);
-        if (!this.lockScreenActive) {
-          player.setActiveForLockScreen(true, metadata);
-          this.lockScreenActive = true;
-        } else {
-          player.updateLockScreenMetadata(metadata);
-        }
-      } catch (e) {
-        console.error('[player] lock screen update failed', e);
-      }
-
       this.emitCurrent();
+      this.updateLockScreen(player, track);
     } catch (e) {
       console.error('[player] failed to start track', track.id, e);
       this.wantsPlay = false;

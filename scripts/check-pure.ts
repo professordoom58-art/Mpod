@@ -12,6 +12,17 @@ import { base64ByteLength } from '../src/library/base64Size';
 import { fnvHex } from '../src/library/fnv';
 import { parseFilename, sortKey } from '../src/library/sortKey';
 import { computeWindow, visibleRowCount } from '../src/ui/windowing';
+import {
+  CHASSIS_COLOR_ORDER,
+  DEFAULT_THEME_ID,
+  THEME_ORDER,
+  isChassisColor,
+  isThemeId,
+  resolveAppTheme,
+  themePresets,
+  type AppThemeConfig,
+  type ThemeId,
+} from '../src/ui/theme';
 
 let failures = 0;
 let checks = 0;
@@ -80,6 +91,142 @@ eq(visibleRowCount(100, 20), 5, 'rows: exact fit');
 eq(visibleRowCount(109, 20), 5, 'rows: floors partial row');
 eq(visibleRowCount(10, 20), 1, 'rows: never below 1');
 eq(visibleRowCount(100, 0), 1, 'rows: guards zero height');
+
+// --- theme presets ---------------------------------------------------------
+// Settings > Themes is generated from THEME_ORDER, so these checks stand in for
+// "the new presets are actually selectable and labelled correctly".
+eq(
+  THEME_ORDER.map((id) => themePresets[id].label),
+  [
+    'Classic Silver',
+    'U2 Black/Red',
+    'Space Gray',
+    'Midnight Blue',
+    'Soft Blue',
+    'Bright Yellow',
+    'Soft Pink',
+    'Deep Red',
+  ],
+  'themes: menu order and friendly labels',
+);
+eq(THEME_ORDER.length, 8, 'themes: eight selectable presets');
+eq(
+  new Set(THEME_ORDER).size,
+  THEME_ORDER.length,
+  'themes: THEME_ORDER has no duplicate ids',
+);
+eq(
+  Object.keys(themePresets).length,
+  THEME_ORDER.length,
+  'themes: THEME_ORDER lists every preset (none unreachable)',
+);
+eq(
+  THEME_ORDER.every((id) => isThemeId(id)),
+  true,
+  'themes: isThemeId accepts every ordered id',
+);
+eq(isThemeId('softBlue'), true, 'themes: isThemeId accepts softBlue');
+eq(isThemeId('brightYellow'), true, 'themes: isThemeId accepts brightYellow');
+eq(isThemeId('softPink'), true, 'themes: isThemeId accepts softPink');
+eq(isThemeId('deepRed'), true, 'themes: isThemeId accepts deepRed');
+eq(isThemeId('chassis-nonsense'), false, 'themes: isThemeId rejects an unknown id');
+eq(isThemeId(null), false, 'themes: isThemeId rejects null');
+
+// Chassis-color aliases used by the Settings list.
+eq(
+  CHASSIS_COLOR_ORDER,
+  THEME_ORDER,
+  'themes: chassis order matches THEME_ORDER',
+);
+eq(
+  ['softBlue', 'brightYellow', 'softPink', 'deepRed'].every((id) => isChassisColor(id)),
+  true,
+  'themes: isChassisColor accepts the four Nano presets',
+);
+eq(isChassisColor('u2-black-red'), true, 'themes: isChassisColor accepts a classic preset');
+eq(isChassisColor('chassis-nonsense'), false, 'themes: isChassisColor rejects an unknown id');
+
+// Stale persisted values and the id/label contract resolveAppTheme relies on.
+eq(resolveAppTheme('chassis-nonsense', null).id, DEFAULT_THEME_ID, 'themes: unknown id falls back');
+eq(resolveAppTheme('deepRed', null).label, 'Deep Red', 'themes: resolves the preset label');
+eq(
+  resolveAppTheme('softBlue', null).label,
+  'Soft Blue',
+  'themes: preset label without overrides',
+);
+eq(
+  resolveAppTheme('softBlue', { accentColor: '#000000' }).label,
+  'Soft Blue (custom)',
+  'themes: overrides mark the label custom',
+);
+eq(
+  resolveAppTheme('softBlue', { accentColor: '#000000' }).accentColor,
+  '#000000',
+  'themes: overrides win over the preset',
+);
+eq(
+  resolveAppTheme('softBlue', null).accentColor,
+  '#4A729A',
+  'themes: softBlue accent',
+);
+eq(
+  resolveAppTheme('brightYellow', null).accentColor,
+  '#C29505',
+  'themes: brightYellow accent',
+);
+eq(resolveAppTheme('softPink', null).accentColor, '#B85C7C', 'themes: softPink accent');
+eq(resolveAppTheme('deepRed', null).accentColor, '#B71C1C', 'themes: deepRed accent');
+
+// The Nano presets must keep a crisp satin-white ring with a colored Select
+// button, per the FigPod finish spec.
+eq(
+  ['softBlue', 'brightYellow', 'softPink', 'deepRed'].map(
+    (id) => (themePresets[id as ThemeId] as AppThemeConfig).wheelColor,
+  ),
+  ['#F7F7F7', '#F7F7F7', '#F7F7F7', '#F7F7F7'],
+  'themes: Nano wheels are satin white',
+);
+eq(
+  ['softBlue', 'brightYellow', 'softPink', 'deepRed'].map(
+    (id) => (themePresets[id as ThemeId] as AppThemeConfig).centerButtonBg,
+  ),
+  ['#7CA1C4', '#E5B81B', '#D982A1', '#B71C1C'],
+  'themes: Nano center buttons match their shells',
+);
+eq(
+  resolveAppTheme('classic-silver', null).screenBgGradient,
+  ['#5C5855', '#464340', '#35322F'],
+  'themes: default Now Playing backdrop is the 3-stop warm matte',
+);
+
+// Every preset must be paintable: no empty required fields, a shell gradient
+// (when present) is a real two-stop pair, and the screen gradient has 2-3 stops.
+eq(
+  THEME_ORDER.every((id) => {
+    const t: AppThemeConfig = themePresets[id];
+    const flat = [t.shellColor, t.wheelColor, t.wheelTextColor, t.accentColor];
+    const okColour = flat.every((c) => /^#[0-9a-fA-F]{6}$/.test(c));
+    const okGradient =
+      t.shellGradient === undefined ||
+      (t.shellGradient.length === 2 &&
+        t.shellGradient.every((c: string) => /^#[0-9a-fA-F]{6}$/.test(c)));
+    const okCenter =
+      t.centerButtonBg === undefined || /^#[0-9a-fA-F]{6}$/.test(t.centerButtonBg);
+    const okScreen =
+      (t.screenBgGradient.length === 2 || t.screenBgGradient.length === 3) &&
+      t.screenBgGradient.every((c: string) => /^#[0-9a-fA-F]{6}$/.test(c));
+    return okColour && okGradient && okCenter && okScreen;
+  }),
+  true,
+  'themes: every preset has valid #rrggbb colors and a 2-3 stop screen gradient',
+);
+eq(
+  ['softBlue', 'brightYellow', 'softPink', 'deepRed'].every(
+    (id) => (themePresets[id as ThemeId] as AppThemeConfig).shellGradient !== undefined,
+  ),
+  true,
+  'themes: the four Nano presets carry a chassis gradient',
+);
 
 // --- summary ---------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`);

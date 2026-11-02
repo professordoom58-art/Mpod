@@ -23,6 +23,7 @@ import Svg, {
 } from 'react-native-svg';
 
 import {
+  selectTopAlbumOverlay,
   selectTopItems,
   selectTopKind,
   selectTopLoading,
@@ -32,6 +33,7 @@ import {
   selectTopWindowStart,
   useMenuStore,
 } from '../nav/menuStack';
+import type { NowPlayingLayout } from '../library/settings';
 import { usePlayerStore } from '../player/store';
 import { CoverFlow } from './CoverFlow';
 import { MenuList } from './MenuList';
@@ -40,7 +42,6 @@ import { ProgressView } from './ProgressView';
 import {
   fonts,
   lcdPalettes,
-  radii,
   spacing,
   DEFAULT_APP_THEME,
   type AppThemeConfig,
@@ -57,6 +58,10 @@ type Props = {
    * colors and the screen background gradient drives the Now Playing screen.
    */
   appTheme?: AppThemeConfig;
+  /** Diagonal LCD glass sheen (Settings > Glass Reflection). */
+  glassReflection?: boolean;
+  /** Which Now Playing design to render (Settings > Now Playing Style). */
+  nowPlayingLayout?: NowPlayingLayout;
 };
 
 /** Brushed-metal header gradient and its hairline bottom edge. */
@@ -69,6 +74,20 @@ const HEADER_TEXT = '#2A2F38';
 const BATTERY_FROM = '#3CD659';
 const BATTERY_TO = '#24A83E';
 const BATTERY_EDGE = '#3F4A3F';
+
+/** Cover Flow reference: glossy blue transport triangle + smooth green cell. */
+const CF_PLAY_FROM = '#3898FF';
+const CF_PLAY_TO = '#0055CC';
+const CF_PLAY_EDGE = '#003380';
+const CF_BATTERY_FROM = '#9BE858';
+const CF_BATTERY_TO = '#3BA818';
+
+/**
+ * Inner LCD corner radius. Deliberately smaller than the black bezel's radius
+ * (radii.bezel) so the pane reads as inset; explicit per-corner values keep
+ * Android from squaring the header gradient off inside the curve.
+ */
+const LCD_RADIUS = 16;
 
 /** Glyph ink for the play/pause indicator. */
 const GLYPH_DARK = '#3A4048';
@@ -102,6 +121,85 @@ function PlayPauseGlyph({ playing }: { playing: boolean }) {
           <Path d="M1 0.6 L8.4 5 L1 3.2 Z" fill={GLYPH_LIGHT} opacity={0.35} />
         </>
       )}
+    </Svg>
+  );
+}
+
+/**
+ * Cover Flow reference transport: the classic glossy blue play triangle. A
+ * vertical blue gradient, a dark edge and a light top wedge sell the enamel.
+ */
+function GlossyPlayGlyph() {
+  const w = 10;
+  const h = 11;
+  return (
+    <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      <Defs>
+        <LinearGradient id="cfPlayFill" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={CF_PLAY_FROM} />
+          <Stop offset="1" stopColor={CF_PLAY_TO} />
+        </LinearGradient>
+      </Defs>
+      <Path
+        d="M1.4 0.9 L9.2 5.5 L1.4 10.1 Z"
+        fill="url(#cfPlayFill)"
+        stroke={CF_PLAY_EDGE}
+        strokeWidth={1}
+        strokeLinejoin="round"
+      />
+      {/* Enamel highlight over the upper half of the triangle. */}
+      <Path d="M2.1 1.6 L7.4 4.9 L2.1 4.9 Z" fill="#FFFFFF" opacity={0.42} />
+    </Svg>
+  );
+}
+
+/**
+ * Cover Flow reference battery: one smooth green gradient cell (no segments),
+ * dark outline and terminal nub — the glossy gauge from the reference image.
+ */
+function GlossyBattery({ level = 0.8 }: { level?: number }) {
+  const bodyW = 18;
+  const bodyH = 9;
+  const inset = 1.6;
+  const fill = Math.min(1, Math.max(0, level));
+
+  return (
+    <Svg width={bodyW + 3} height={bodyH} viewBox={`0 0 ${bodyW + 3} ${bodyH}`}>
+      <Defs>
+        <LinearGradient id="cfBatteryFill" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={CF_BATTERY_FROM} />
+          <Stop offset="1" stopColor={CF_BATTERY_TO} />
+        </LinearGradient>
+      </Defs>
+      <Rect
+        x={0.5}
+        y={0.5}
+        width={bodyW - 1}
+        height={bodyH - 1}
+        rx={2}
+        stroke={BATTERY_EDGE}
+        strokeWidth={1}
+        fill="none"
+      />
+      <Rect x={bodyW} y={bodyH / 2 - 2} width={2} height={4} rx={0.8} fill={BATTERY_EDGE} />
+      <Rect
+        x={inset}
+        y={inset}
+        width={Math.max(0, (bodyW - inset * 2) * fill)}
+        height={bodyH - inset * 2}
+        rx={0.8}
+        fill="url(#cfBatteryFill)"
+      />
+      {/* 1px specular line inside the top of the cell. */}
+      <Rect
+        x={inset}
+        y={inset}
+        width={Math.max(0, (bodyW - inset * 2) * fill)}
+        height={1}
+        rx={0.5}
+        fill="#FFFFFF"
+        opacity={0.45}
+      />
     </Svg>
   );
 }
@@ -163,6 +261,28 @@ function BatteryIcon({ level }: { level: number }) {
 }
 
 /**
+ * Diagonal LCD glass reflection: a translucent white band from the top-right
+ * corner down to the bottom-left, covering the upper-left half of the pane.
+ * Purely decorative — it never intercepts a touch.
+ */
+function GlassSheen({ width, height }: { width: number; height: number }) {
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Svg width={width} height={height}>
+        <Defs>
+          <LinearGradient id="glassSheen" x1="1" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.07} />
+            <Stop offset="0.55" stopColor="#FFFFFF" stopOpacity={0.03} />
+            <Stop offset="1" stopColor="#FFFFFF" stopOpacity={0} />
+          </LinearGradient>
+        </Defs>
+        <Path d={`M0 0 H${width} L0 ${height} Z`} fill="url(#glassSheen)" />
+      </Svg>
+    </View>
+  );
+}
+
+/**
  * The brushed-metal title bar. Subscribes to `playing` itself so the play
  * indicator can change without re-rendering the list below it.
  */
@@ -179,22 +299,41 @@ function ScreenHeader({
   const playing = usePlayerStore((s) => s.playing);
   const h = spacing.titleBarHeight;
   const coverFlow = variant === 'coverflow';
+  // Match the LCD's own radius. Applied to the header container AND painted
+  // into the SVG (rounded-top path) so Android cannot render square corners
+  // over the black bezel even when the SVG is its own native view.
+  const topRadius = LCD_RADIUS;
 
   return (
-    <View style={[styles.titleBar, { height: h }]}>
+    <View
+      style={[
+        styles.titleBar,
+        {
+          height: h,
+          borderTopLeftRadius: topRadius,
+          borderTopRightRadius: topRadius,
+        },
+      ]}
+    >
       {/*
         Metallic gradient + hairline bottom edge, drawn behind the content.
         Drawn in pixel units (no viewBox) so the 1px border is exactly 1 point
         instead of being scaled by a normalized coordinate space.
       */}
-      <Svg style={StyleSheet.absoluteFill} width={width} height={h}>
+      <Svg style={[StyleSheet.absoluteFill, styles.headerSvg]} width={width} height={h}>
         <Defs>
           <LinearGradient id="headerMetal" x1="0" y1="0" x2="0" y2="1">
             <Stop offset="0" stopColor={HEADER_FROM} />
             <Stop offset="1" stopColor={HEADER_TO} />
           </LinearGradient>
         </Defs>
-        <Rect x={0} y={0} width={width} height={h} fill="url(#headerMetal)" />
+        {/* Rounded-top gradient: the corner radius is part of the geometry,
+            not just a parent clip, so the header can never paint a square
+            corner into the bezel on a platform that ignores overflow. */}
+        <Path
+          d={`M0 ${topRadius} Q0 0 ${topRadius} 0 H${width - topRadius} Q${width} 0 ${width} ${topRadius} V${h} H0 Z`}
+          fill="url(#headerMetal)"
+        />
         {/* 1px bottom border. */}
         <Rect x={0} y={h - 1} width={width} height={1} fill={HEADER_BORDER} />
       </Svg>
@@ -212,10 +351,10 @@ function ScreenHeader({
           <View style={styles.coverFlowRight}>
             {playing ? (
               <View style={styles.headerPlay}>
-                <PlayPauseGlyph playing />
+                <GlossyPlayGlyph />
               </View>
             ) : null}
-            <BatteryIcon level={0.8} />
+            <GlossyBattery level={0.8} />
           </View>
         </>
       ) : (
@@ -235,7 +374,14 @@ function ScreenHeader({
   );
 }
 
-export function Screen({ width, height, paletteName = 'color', appTheme = DEFAULT_APP_THEME }: Props) {
+export function Screen({
+  width,
+  height,
+  paletteName = 'color',
+  appTheme = DEFAULT_APP_THEME,
+  glassReflection = true,
+  nowPlayingLayout = 'split',
+}: Props) {
   // The accent color from the active theme replaces the LCD's blue highlight
   // and progress fill, so a theme change repaints the list and progress bars
   // without touching MenuList/ProgressView.
@@ -255,6 +401,7 @@ export function Screen({ width, height, paletteName = 'color', appTheme = DEFAUL
   const loading = useMenuStore(selectTopLoading);
   const status = useMenuStore(selectTopStatus);
   const kind = useMenuStore(selectTopKind);
+  const albumOverlay = useMenuStore(selectTopAlbumOverlay);
 
   const setVisibleRows = useMenuStore((s) => s.setVisibleRows);
 
@@ -285,6 +432,7 @@ export function Screen({ width, height, paletteName = 'color', appTheme = DEFAUL
           height={bodyHeight}
           palette={palette}
           loading={loading}
+          overlay={albumOverlay}
         />
       );
     }
@@ -311,12 +459,24 @@ export function Screen({ width, height, paletteName = 'color', appTheme = DEFAUL
     palette,
     loading,
     status,
+    albumOverlay,
   ]);
 
   // Now Playing owns the full body: its own themed gradient, status bar,
-  // artwork, metadata, scrubber and footer.
+  // artwork, metadata, scrubber and footer. It is still wrapped in the LCD
+  // viewport so the 16 pt radius + overflow clip the full-bleed gradient.
   if (kind === 'nowplaying') {
-    return <NowPlaying width={width} height={height} theme={appTheme} />;
+    return (
+      <View style={[styles.lcd, { width, height }]}>
+        <NowPlaying
+          width={width}
+          height={height}
+          theme={appTheme}
+          layout={nowPlayingLayout}
+        />
+        {glassReflection ? <GlassSheen width={width} height={height} /> : null}
+      </View>
+    );
   }
 
   return (
@@ -328,6 +488,9 @@ export function Screen({ width, height, paletteName = 'color', appTheme = DEFAUL
       />
 
       {listContent}
+
+      {/* Diagonal glass reflection, under the bezel bevel highlights. */}
+      {glassReflection ? <GlassSheen width={width} height={height} /> : null}
 
       {status ? (
         <View style={[styles.statusLine, { height: spacing.statusLineHeight }]}>
@@ -366,14 +529,29 @@ export function Screen({ width, height, paletteName = 'color', appTheme = DEFAUL
 const styles = StyleSheet.create({
   lcd: {
     overflow: 'hidden',
-    // The acrylic pane sits inside the thick black bezel, so it takes its own
-    // (smaller) radius from the theme.
-    borderRadius: radii.screen,
+    // The acrylic pane sits inside the thick black bezel. Every corner is
+    // spelled out explicitly: Android only clips a child to the parent's
+    // radius when the corner radii are non-zero on the clipping view itself.
+    borderRadius: LCD_RADIUS,
+    borderTopLeftRadius: LCD_RADIUS,
+    borderTopRightRadius: LCD_RADIUS,
+    borderBottomLeftRadius: LCD_RADIUS,
+    borderBottomRightRadius: LCD_RADIUS,
   },
   titleBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing.lcdPaddingH,
+    // The header gradient is a child SVG that would otherwise square off the
+    // LCD's top corners; clip it to the same curve as the pane.
+    borderTopLeftRadius: LCD_RADIUS,
+    borderTopRightRadius: LCD_RADIUS,
+    overflow: 'hidden',
+  },
+  /** The header's own SVG also carries the top radii, not just its parent. */
+  headerSvg: {
+    borderTopLeftRadius: LCD_RADIUS,
+    borderTopRightRadius: LCD_RADIUS,
     overflow: 'hidden',
   },
   titleLeft: {
@@ -419,7 +597,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    borderRadius: radii.screen,
+    borderRadius: LCD_RADIUS,
     overflow: 'hidden',
   },
 });

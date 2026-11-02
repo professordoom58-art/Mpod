@@ -27,6 +27,7 @@ import { DebugOverlay } from './DebugOverlay';
 import { Screen } from './Screen';
 import {
   colors,
+  isDarkHex,
   layout,
   radii,
   resolveAppTheme,
@@ -154,11 +155,27 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
   // retints the shell, the wheel and the screen without a relaunch.
   const appTheme = resolveAppTheme(settings?.themeId, settings?.customTheme);
 
+  // A preset with `shellGradient` is painted full-screen by App.tsx, so this
+  // chassis must stay transparent or it would cover the finish with the flat
+  // fallback color. Presets without one keep the old flat shell.
+  const chassisBackground = appTheme.shellGradient ? 'transparent' : appTheme.shellColor;
+
+  // Optional Select-button face from the preset. ClickWheel paints the disc in
+  // this color and keeps the outer ring crisp white.
+  const centerButtonColor = appTheme.centerButtonBg;
+
+  // Metallic chamfer around the outer bezel: a 1.5 pt lit rim. Brighter on
+  // light shells where it reads as polished aluminium, dimmer on dark shells
+  // where a strong white edge would look like a scratch.
+  const chamferColor = isDarkHex(appTheme.shellColor)
+    ? 'rgba(255,255,255,0.14)'
+    : 'rgba(255,255,255,0.35)';
+
   return (
     <View
       style={[
         styles.chassis,
-        { width: availableWidth, height: availableHeight, backgroundColor: appTheme.shellColor },
+        { width: availableWidth, height: availableHeight, backgroundColor: chassisBackground },
       ]}
     >
       {/*
@@ -170,10 +187,30 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
         <View
           style={[
             styles.bezel,
-            { width: bezelWidth, borderRadius: radii.bezel, padding: spacing.bezelPadding },
+            {
+              width: bezelWidth,
+              borderRadius: radii.bezel,
+              padding: spacing.bezelPadding,
+            },
           ]}
         >
-          <Screen width={screenWidth} height={screenHeight} appTheme={appTheme} />
+          <Screen
+            width={screenWidth}
+            height={screenHeight}
+            appTheme={appTheme}
+            glassReflection={settings?.glassReflection ?? true}
+            nowPlayingLayout={settings?.nowPlayingLayout ?? 'split'}
+          />
+
+          {/* Chamfer lip: drawn last and pointer-transparent so it sits on the
+              outer edge of the black bezel without affecting layout. */}
+          <View
+            pointerEvents="none"
+            style={[
+              styles.chamfer,
+              { borderRadius: radii.bezel, borderColor: chamferColor },
+            ]}
+          />
         </View>
 
         <GestureDetector gesture={gesture}>
@@ -183,6 +220,7 @@ export function Body({ availableWidth, availableHeight, showDebug }: Props) {
               innerRatio={layout.wheelInnerRatio}
               wheelColor={appTheme.wheelColor}
               wheelTextColor={appTheme.wheelTextColor}
+              centerButtonColor={centerButtonColor}
             />
           </View>
         </GestureDetector>
@@ -217,9 +255,22 @@ const styles = StyleSheet.create({
     paddingBottom: CHASSIS_BOTTOM_PAD,
   },
   bezel: {
-    backgroundColor: colors.bezel,
+    // Thick black acrylic frame: 24 pt outer radius, 10 pt padding, inner LCD
+    // gets its own 16 pt radius. `overflow: hidden` guarantees no square child
+    // corner (header SVG, Now Playing gradient) can poke out of the frame.
+    backgroundColor: '#0a0a0a',
     borderColor: colors.bezelEdge,
     borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+  },
+  /** 1.5 pt metallic rim around the outer bezel (Reference 1 chamfer). */
+  chamfer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderWidth: 1.5,
   },
   /** Debug readout floats over the chassis and never joins the flex column. */
   debug: {

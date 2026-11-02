@@ -19,12 +19,15 @@ import { hasNativeTagReader } from '../library/metadata';
 import { getPrimaryProvider } from '../library/providers';
 import {
   MIN_TRACK_LENGTH_CHOICES,
+  NOW_PLAYING_LAYOUTS,
   WHEEL_TICK_MAX,
   WHEEL_TICK_MIN,
   loadPlaybackSession,
   loadSettings,
+  setGlassReflection,
   setHapticsEnabled as persistHaptics,
   setMinTrackLengthMs,
+  setNowPlayingLayout,
   setThemeId,
   setThemeOverrides,
   setWheelTickDeg,
@@ -46,6 +49,7 @@ import {
   resolveAppTheme,
   themePresets,
   type AppThemeConfig,
+  type ScreenGradient,
   type ThemeField,
   type ThemeOverrides,
 } from '../ui/theme';
@@ -176,6 +180,26 @@ function settingsRows(): Row[] {
     sub: activeThemeLabel(),
     onSelect: () => {
       fireAndForget(pushThemes());
+    },
+  });
+
+  rows.push({
+    id: 'glass-reflection',
+    label: 'Glass Reflection',
+    chevron: true,
+    sub: glassReflectionLabel(),
+    onSelect: () => {
+      pushGlassReflection();
+    },
+  });
+
+  rows.push({
+    id: 'now-playing-style',
+    label: 'Now Playing Style',
+    chevron: true,
+    sub: nowPlayingLayoutLabel(),
+    onSelect: () => {
+      pushNowPlayingStyle();
     },
   });
 
@@ -374,6 +398,89 @@ async function pushHaptics(): Promise<void> {
   });
 }
 
+/** On/Off summary for the Settings frame's Glass Reflection row. */
+function glassReflectionLabel(): string {
+  return useLibraryStore.getState().settings?.glassReflection ?? true
+    ? 'On'
+    : 'Off';
+}
+
+/** Friendly name of the active Now Playing design. */
+function nowPlayingLayoutLabel(): string {
+  const current = useLibraryStore.getState().settings?.nowPlayingLayout ?? 'split';
+  const found = NOW_PLAYING_LAYOUTS.find((option) => option.value === current);
+  return found ? found.label : 'Modern Split';
+}
+
+/** Settings > Glass Reflection. Toggles the diagonal LCD sheen live. */
+async function pushGlassReflection(): Promise<void> {
+  const settings = await loadSettings();
+  const apply = (on: boolean) => {
+    fireAndForget(
+      (async () => {
+        await setGlassReflection(on);
+        useLibraryStore.getState().setSettings(await loadSettings());
+        useMenuStore.getState().pop();
+        refreshSettingsFrame();
+        useMenuStore.getState().setStatus(`Glass reflection ${on ? 'on' : 'off'}`);
+      })(),
+    );
+  };
+
+  useMenuStore.getState().push({
+    id: 'glass-reflection',
+    title: 'Glass Reflection',
+    kind: 'settings',
+    items: [
+      {
+        id: 'on',
+        label: 'On',
+        sub: settings.glassReflection ? 'Selected' : undefined,
+        onSelect: () => apply(true),
+      },
+      {
+        id: 'off',
+        label: 'Off',
+        sub: !settings.glassReflection ? 'Selected' : undefined,
+        onSelect: () => apply(false),
+      },
+    ],
+    initialIndex: settings.glassReflection ? 0 : 1,
+  });
+}
+
+/** Settings > Now Playing Style. Applies on the next Now Playing render. */
+async function pushNowPlayingStyle(): Promise<void> {
+  const settings = await loadSettings();
+  const items: Row[] = NOW_PLAYING_LAYOUTS.map((option) => ({
+    id: `np-${option.value}`,
+    label: option.label,
+    sub: settings.nowPlayingLayout === option.value ? 'Selected' : undefined,
+    onSelect: () => {
+      fireAndForget(
+        (async () => {
+          await setNowPlayingLayout(option.value);
+          useLibraryStore.getState().setSettings(await loadSettings());
+          useMenuStore.getState().pop();
+          refreshSettingsFrame();
+          useMenuStore.getState().setStatus(`Now Playing: ${option.label}`);
+        })(),
+      );
+    },
+  }));
+
+  useMenuStore.getState().push({
+    id: 'now-playing-style',
+    title: 'Now Playing Style',
+    kind: 'settings',
+    items,
+    initialIndex: Math.max(
+      0,
+      NOW_PLAYING_LAYOUTS.findIndex((o) => o.value === settings.nowPlayingLayout),
+    ),
+  });
+}
+
 /** Short label for the Settings row: the active preset, or "Custom". */
 function activeThemeLabel(): string {
   const settings = useLibraryStore.getState().settings;
@@ -384,7 +491,7 @@ function activeThemeLabel(): string {
 function themeFieldValueLabel(resolved: AppThemeConfig, key: ThemeField): string {
   const value = resolved[key];
   if (key === 'screenBgGradient') {
-    const grad = value as readonly [string, string];
+    const grad = value as ScreenGradient;
     const found = GRADIENT_SWATCHES.find(
       (g) => g.value.join('|').toLowerCase() === grad.join('|').toLowerCase(),
     );
@@ -416,6 +523,9 @@ function buildThemeRows(s: Settings): Row[] {
           await setThemeOverrides(null);
           useLibraryStore.getState().setSettings(await loadSettings());
           useMenuStore.getState().pop();
+          // Settings is the top frame again: rebuild it so its "Themes" row
+          // names the preset that was just applied.
+          refreshSettingsFrame();
           useMenuStore.getState().setStatus(`Theme: ${themePresets[id].label}`);
         })(),
       );
@@ -446,6 +556,7 @@ function buildThemeRows(s: Settings): Row[] {
           }
           useLibraryStore.getState().setSettings(await loadSettings());
           refreshThemesFrame();
+          refreshSettingsFrame();
         })(),
       );
     },
@@ -477,7 +588,8 @@ async function cycleThemeField(field: ThemeField): Promise<void> {
     const key = resolved.screenBgGradient.join('|').toLowerCase();
     const i = GRADIENT_SWATCHES.findIndex((g) => g.value.join('|').toLowerCase() === key);
     const pick = GRADIENT_SWATCHES[(i + 1) % GRADIENT_SWATCHES.length];
-    next.screenBgGradient = [pick.value[0], pick.value[1]];
+    // Keep the swatch's stop count (Warm Matte is a three-stop gradient).
+    next.screenBgGradient = pick.value;
   } else {
     const colorField = field as Exclude<ThemeField, 'screenBgGradient'>;
     const cur = resolved[colorField].toLowerCase();
@@ -488,6 +600,18 @@ async function cycleThemeField(field: ThemeField): Promise<void> {
   await setThemeOverrides(next);
   useLibraryStore.getState().setSettings(await loadSettings());
   refreshThemesFrame();
+  refreshSettingsFrame();
+}
+
+/**
+ * Rebuilds the Settings frame in place when it is in the stack, so its summary
+ * labels (the Themes row's active-preset subtitle) never go stale after a
+ * change made on a child screen.
+ */
+function refreshSettingsFrame(): void {
+  const stack = useMenuStore.getState().stack;
+  if (!stack.some((frame) => frame.id === 'settings')) return;
+  useMenuStore.getState().updateFrameItems('settings', settingsRows());
 }
 
 /** Rebuilds the top frame in place when it is the Themes screen. */
@@ -902,6 +1026,38 @@ export function pushNowPlaying(track: Track | null): void {
       { id: 'album', label: track.album },
     ],
   });
+}
+
+/**
+ * Cover Flow Select: flip the highlighted album open into its tracklist card.
+ * The card opens immediately (loading), then fills with the album's tracks.
+ * Called from the wheel wiring, which owns the Cover Flow select behaviour.
+ */
+export async function openAlbumOverlay(): Promise<void> {
+  const menu = useMenuStore.getState();
+  const top = menu.stack[menu.stack.length - 1];
+  if (!top || top.kind !== 'coverflow' || top.albumOverlay) return;
+
+  const row = top.items[top.selectedIndex];
+  if (!row) return;
+
+  menu.openAlbumOverlay({
+    sourceId: row.id,
+    title: row.label,
+    sub: row.sub,
+    artworkPath: row.artworkPath,
+  });
+
+  const tracks = await getTracks({ album: row.label, artist: row.sub });
+  if (tracks.length === 0) {
+    useMenuStore.getState().setAlbumOverlayItems(row.id, [
+      { id: 'empty-album', label: 'No tracks' },
+    ]);
+    return;
+  }
+
+  const ids = tracks.map((t) => t.id);
+  useMenuStore.getState().setAlbumOverlayItems(row.id, trackRows(tracks, ids));
 }
 
 /** Fetches full rows for a bounded queue (album or artist). */

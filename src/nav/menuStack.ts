@@ -33,10 +33,28 @@ export type Row = {
   onSelect?: () => void;
 };
 
+/**
+ * The album tracklist card that a Cover Flow card flips into. It lives on the
+ * cover-flow frame (not a pushed frame) because MENU must flip it closed rather
+ * than leave the carousel, and because the wheel keeps driving its selection.
+ */
+export type AlbumOverlay = {
+  /** Row id of the album this was opened from, so a stale loader can bail. */
+  sourceId: string;
+  title: string;
+  sub?: string;
+  artworkPath?: string;
+  items: Row[];
+  selectedIndex: number;
+  loading: boolean;
+};
+
 export type Frame = {
   id: string;
   title: string;
   kind: FrameKind;
+  /** Present while a Cover Flow album card is flipped open. */
+  albumOverlay?: AlbumOverlay;
   /** Resolved rows. Empty while a loader is pending. */
   items: Row[];
   /** Present while an async loader is in flight. */
@@ -78,6 +96,18 @@ type MenuState = {
   setVisibleRows: (rows: number) => void;
   setStatus: (status: string | undefined) => void;
   replaceTopItems: (items: Row[]) => void;
+  updateFrameItems: (id: string, items: Row[]) => void;
+  /** Flips the selected Cover Flow album open into its tracklist card. */
+  openAlbumOverlay: (input: {
+    sourceId: string;
+    title: string;
+    sub?: string;
+    artworkPath?: string;
+  }) => void;
+  /** Fills in the track rows once the album's tracks have loaded. */
+  setAlbumOverlayItems: (sourceId: string, items: Row[]) => void;
+  /** Flips the tracklist card closed. Returns false when none was open. */
+  closeAlbumOverlay: () => boolean;
   /** Replaces the bottom (root) frame's rows without disturbing depth. */
   replaceRootItems: (items: Row[]) => void;
   showJump: (letter: string) => void;
@@ -207,6 +237,14 @@ export const useMenuStore = create<MenuState>((set, get) => ({
 
   pop: () => {
     const { stack } = get();
+    if (stack.length === 0) return false;
+    const top = stack[stack.length - 1];
+    // A flipped-open tracklist card is the topmost "screen": MENU closes it
+    // instead of leaving Cover Flow.
+    if (top.albumOverlay) {
+      set({ stack: [...stack.slice(0, -1), { ...top, albumOverlay: undefined }] });
+      return true;
+    }
     if (stack.length <= 1) return false;
     set({ stack: stack.slice(0, -1) });
     return true;
@@ -226,9 +264,30 @@ export const useMenuStore = create<MenuState>((set, get) => ({
     if (stack.length === 0) return 'bounced';
 
     const top = stack[stack.length - 1];
-    if (top.loading || top.items.length === 0) return 'bounced';
+    if (top.loading) return 'bounced';
 
     const count = Math.max(1, Math.trunc(steps));
+
+    // While an album's tracklist card is flipped open, the wheel scrolls the
+    // track rows, not the albums behind them.
+    const overlay = top.albumOverlay;
+    if (overlay) {
+      if (overlay.loading || overlay.items.length === 0) return 'bounced';
+      const next = Math.min(
+        Math.max(overlay.selectedIndex + dir * count, 0),
+        overlay.items.length - 1,
+      );
+      if (next === overlay.selectedIndex) return 'bounced';
+      set({
+        stack: [
+          ...stack.slice(0, -1),
+          { ...top, albumOverlay: { ...overlay, selectedIndex: next } },
+        ],
+      });
+      return 'moved';
+    }
+
+    if (top.items.length === 0) return 'bounced';
     const next = Math.min(
       Math.max(top.selectedIndex + dir * count, 0),
       top.items.length - 1,
@@ -281,6 +340,88 @@ export const useMenuStore = create<MenuState>((set, get) => ({
     });
   },
 
+  /**
+   * Rebuilds one frame's rows in place, wherever it sits in the stack, keeping
+   * its selection. Lets a child screen refresh a parent's summary labels (e.g.
+   * the Settings row naming the active theme) without popping.
+   */
+  updateFrameItems: (id, items) => {
+    const { stack } = get();
+    const index = stack.findIndex((f) => f.id === id);
+    if (index < 0) return;
+    const frame = stack[index];
+    const selectedIndex = Math.min(frame.selectedIndex, Math.max(0, items.length - 1));
+    set({
+      stack: stack.map((f, i) =>
+        i === index
+          ? {
+              ...f,
+              items,
+              loading: false,
+              selectedIndex,
+              windowStart: computeWindow(selectedIndex, 0, f.visibleRows, items.length),
+            }
+          : f,
+      ),
+    });
+  },
+
+  openAlbumOverlay: (input) => {
+    const { stack } = get();
+    if (stack.length === 0) return;
+    const top = stack[stack.length - 1];
+    if (top.kind !== 'coverflow') return;
+    set({
+      stack: [
+        ...stack.slice(0, -1),
+        {
+          ...top,
+          albumOverlay: {
+            sourceId: input.sourceId,
+            title: input.title,
+            sub: input.sub,
+            artworkPath: input.artworkPath,
+            items: [],
+            selectedIndex: 0,
+            loading: true,
+          },
+        },
+      ],
+    });
+  },
+
+  setAlbumOverlayItems: (sourceId, items) => {
+    const { stack } = get();
+    if (stack.length === 0) return;
+    const top = stack[stack.length - 1];
+    const overlay = top.albumOverlay;
+    // Ignore a late loader for an album the user already flipped away from.
+    if (!overlay || overlay.sourceId !== sourceId) return;
+    set({
+      stack: [
+        ...stack.slice(0, -1),
+        {
+          ...top,
+          albumOverlay: {
+            ...overlay,
+            items,
+            selectedIndex: Math.min(overlay.selectedIndex, Math.max(0, items.length - 1)),
+            loading: false,
+          },
+        },
+      ],
+    });
+  },
+
+  closeAlbumOverlay: () => {
+    const { stack } = get();
+    if (stack.length === 0) return false;
+    const top = stack[stack.length - 1];
+    if (!top.albumOverlay) return false;
+    set({ stack: [...stack.slice(0, -1), { ...top, albumOverlay: undefined }] });
+    return true;
+  },
+
   replaceTopItems: (items) => {
     const { stack } = get();
     if (stack.length === 0) return;
@@ -320,6 +461,8 @@ export const selectTopStatus = (s: MenuState): string | undefined =>
   s.stack.length > 0 ? s.stack[s.stack.length - 1].status : undefined;
 export const selectTopKind = (s: MenuState): FrameKind =>
   s.stack.length > 0 ? s.stack[s.stack.length - 1].kind : 'menu';
+export const selectTopAlbumOverlay = (s: MenuState): AlbumOverlay | undefined =>
+  s.stack.length > 0 ? s.stack[s.stack.length - 1].albumOverlay : undefined;
 export const selectJumpLetter = (s: MenuState): string | null => s.jumpLetter;
 
 const EMPTY_ROWS: Row[] = [];
@@ -329,5 +472,9 @@ export function getSelectedRow(): Row | undefined {
   const { stack } = useMenuStore.getState();
   if (stack.length === 0) return undefined;
   const top = stack[stack.length - 1];
+  if (top.albumOverlay) {
+    const overlay = top.albumOverlay;
+    return overlay.items[overlay.selectedIndex];
+  }
   return top.items[top.selectedIndex];
 }

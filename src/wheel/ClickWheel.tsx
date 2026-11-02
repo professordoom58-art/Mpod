@@ -34,7 +34,7 @@ import Svg, {
   Text as SvgText,
 } from 'react-native-svg';
 
-import { darkenHex, hexLuminance, layout } from '../ui/theme';
+import { darkenHex, hexLuminance, layout, lightenHex } from '../ui/theme';
 
 type Props = {
   /** Outer diameter in points. */
@@ -48,8 +48,14 @@ type Props = {
   /** Wheel label/glyph ink from the active AppThemeConfig. */
   wheelTextColor?: string;
   /**
-   * Optional explicit concavity override: `light` is the lit rim, `dark` the
-   * recessed middle. Defaults to shades derived from `wheelColor`.
+   * Optional Select-button face color. When it differs from `wheelColor` the
+   * center disc is painted in this color (its shading still reads concave)
+   * while the outer ring stays the crisp `wheelColor`.
+   */
+  centerButtonColor?: string;
+  /**
+   * Explicit concavity override: `light` is the lit rim, `dark` the recessed
+   * middle. Only used when `centerButtonColor` is absent.
    */
   center?: { light: string; dark: string };
 };
@@ -104,6 +110,7 @@ export function ClickWheel({
   showLabels = true,
   wheelColor = DEFAULT_WHEEL_COLOR,
   wheelTextColor = DEFAULT_WHEEL_INK,
+  centerButtonColor,
   center,
 }: Props) {
   const c = size / 2;
@@ -117,9 +124,20 @@ export function ClickWheel({
   const faceMid = darkenHex(wheelColor, 0.03);
   const faceBottom = darkenHex(wheelColor, 0.11);
   const faceEdge = darkenHex(wheelColor, 0.14);
-  const centerLight = center?.light ?? darkenHex(wheelColor, 0.06);
-  const centerDark = center?.dark ?? darkenHex(wheelColor, 0.14);
-  const centerEdge = darkenHex(wheelColor, 0.2);
+
+  // Colored Select button (FigPod anodized set): the disc takes the preset's
+  // center/shell color while the outer ring stays satin white. The shading is
+  // still concave — lit at the rim, slightly darker in the middle.
+  const customCenter =
+    centerButtonColor !== undefined &&
+    centerButtonColor.toLowerCase() !== wheelColor.toLowerCase();
+  const centerBase = centerButtonColor ?? wheelColor;
+  const centerLight =
+    center?.light ??
+    (customCenter ? lightenHex(centerBase, 0.04) : darkenHex(wheelColor, 0.06));
+  const centerDark =
+    center?.dark ?? (customCenter ? darkenHex(centerBase, 0.12) : darkenHex(wheelColor, 0.14));
+  const centerEdge = customCenter ? darkenHex(centerBase, 0.24) : darkenHex(wheelColor, 0.2);
 
   // A white sheen at full strength washes out a black or red wheel, so the
   // ring gloss scales with the face brightness (0.15 .. 0.5).

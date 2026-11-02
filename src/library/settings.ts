@@ -27,15 +27,38 @@ export const SETTING_KEYS = {
   lastScanFallback: 'scan.lastScanFallback',
   themeId: 'ui.theme',
   themeCustom: 'ui.themeCustom',
+  glassReflection: 'ui.glassReflection',
+  nowPlayingLayout: 'ui.nowPlayingLayout',
   lastTrackId: 'player.lastTrackId',
   lastPositionMs: 'player.lastPositionMs',
 } as const;
+
+/** Now Playing designs offered by Settings > Now Playing Style. */
+export type NowPlayingLayout = 'split' | 'full';
+
+export const NOW_PLAYING_LAYOUTS: readonly {
+  value: NowPlayingLayout;
+  label: string;
+}[] = [
+  { value: 'split', label: 'Modern Split' },
+  { value: 'full', label: 'Full Art (figPod)' },
+];
+
+export function isNowPlayingLayout(
+  value: string | null | undefined,
+): value is NowPlayingLayout {
+  return value === 'split' || value === 'full';
+}
 
 export const DEFAULTS = {
   wheelTickDeg: 15,
   hapticsEnabled: true,
   minTrackLengthMs: 30000,
   themeId: DEFAULT_THEME_ID,
+  /** Diagonal LCD glass sheen. On by default, matching the reference render. */
+  glassReflection: true,
+  /** Now Playing design; `split` is our 2-column concept layout. */
+  nowPlayingLayout: 'split' as NowPlayingLayout,
 } as const;
 
 export const WHEEL_TICK_MIN = 10;
@@ -56,6 +79,10 @@ export type Settings = {
   themeId: ThemeId;
   /** Per-field overrides for the "Custom Colors" mode, or null when off. */
   customTheme: ThemeOverrides | null;
+  /** Draw the diagonal glass sheen over the LCD. */
+  glassReflection: boolean;
+  /** Which Now Playing design the screen uses. */
+  nowPlayingLayout: NowPlayingLayout;
 };
 
 export async function loadSettings(): Promise<Settings> {
@@ -69,6 +96,8 @@ export async function loadSettings(): Promise<Settings> {
     lastScanFallback,
     themeIdRaw,
     themeCustomRaw,
+    glassReflection,
+    nowPlayingLayoutRaw,
   ] = await Promise.all([
     getSettingNumber(SETTING_KEYS.wheelTickDeg, DEFAULTS.wheelTickDeg),
     getSettingBool(SETTING_KEYS.hapticsEnabled, DEFAULTS.hapticsEnabled),
@@ -79,6 +108,8 @@ export async function loadSettings(): Promise<Settings> {
     getSettingNumber(SETTING_KEYS.lastScanFallback, 0),
     getSetting(SETTING_KEYS.themeId),
     getSetting(SETTING_KEYS.themeCustom),
+    getSettingBool(SETTING_KEYS.glassReflection, DEFAULTS.glassReflection),
+    getSetting(SETTING_KEYS.nowPlayingLayout),
   ]);
 
   return {
@@ -91,6 +122,10 @@ export async function loadSettings(): Promise<Settings> {
     lastScanFallback,
     themeId: isThemeId(themeIdRaw) ? themeIdRaw : DEFAULTS.themeId,
     customTheme: parseThemeOverrides(themeCustomRaw),
+    glassReflection,
+    nowPlayingLayout: isNowPlayingLayout(nowPlayingLayoutRaw)
+      ? nowPlayingLayoutRaw
+      : DEFAULTS.nowPlayingLayout,
   };
 }
 
@@ -150,6 +185,16 @@ export async function readRaw(key: string): Promise<string | null> {
 
 export async function setThemeId(value: ThemeId): Promise<void> {
   await setSetting(SETTING_KEYS.themeId, value);
+}
+
+export async function setGlassReflection(value: boolean): Promise<void> {
+  await setSettingBool(SETTING_KEYS.glassReflection, value);
+}
+
+export async function setNowPlayingLayout(
+  value: NowPlayingLayout,
+): Promise<void> {
+  await setSetting(SETTING_KEYS.nowPlayingLayout, value);
 }
 
 /** Writes the custom overrides, or clears them when null. */

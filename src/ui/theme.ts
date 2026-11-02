@@ -103,17 +103,40 @@ export const DEFAULT_LCD_PALETTE: LcdPaletteName = 'color';
 // so Settings can "tinker" without defining a whole palette.
 // ---------------------------------------------------------------------------
 
+/**
+ * A vertical screen gradient: two stops minimum, optionally a middle stop for
+ * the richer reference backdrop (top, middle, bottom).
+ */
+export type ScreenGradient =
+  | readonly [string, string]
+  | readonly [string, string, string];
+
 export type AppThemeConfig = {
   id: string;
   label: string;
   /** Chassis finish: the phone viewport behind the screen and wheel. */
   shellColor: string;
+  /**
+   * Optional vertical [top, bottom] chassis gradient (the "metallic" finish).
+   * When present the viewport is painted with it and `shellColor` stays the
+   * flat fallback — it is still used for the status-bar ink decision, the
+   * first paint and any surface that cannot take a gradient.
+   */
+  shellGradient?: readonly [string, string];
   /** Click-wheel face color. */
   wheelColor: string;
   /** Wheel label/glyph ink. */
   wheelTextColor: string;
-  /** Screen background gradient, [top, bottom]. Drives Now Playing. */
-  screenBgGradient: readonly [string, string];
+  /**
+   * Optional Select-button face color. When it differs from `wheelColor` the
+   * center button is painted in this color while the ring stays `wheelColor`.
+   */
+  centerButtonBg?: string;
+  /**
+   * Screen background gradient. Drives Now Playing; two stops, or three when
+   * the preset wants the reference's warm three-band vignette.
+   */
+  screenBgGradient: ScreenGradient;
   /** Selection pill, progress fill and other highlights. */
   accentColor: string;
 };
@@ -133,7 +156,9 @@ export const themePresets = {
     shellColor: '#E8ECF2',
     wheelColor: '#FFFFFF',
     wheelTextColor: '#7A828E',
-    screenBgGradient: ['#5C5855', '#363330'] as const,
+    // Reference warm matte charcoal: three explicit stops so Now Playing's
+    // default backdrop is the concept's vignette, not an interpolated ramp.
+    screenBgGradient: ['#5C5855', '#464340', '#35322F'] as const,
     accentColor: '#2971E7',
   },
   'u2-black-red': {
@@ -163,21 +188,94 @@ export const themePresets = {
     screenBgGradient: ['#1B2440', '#0C1326'] as const,
     accentColor: '#4F93F7',
   },
+  // --- "Nano" saturation set (Feature 3): anodized metallic shells with a
+  // satin-white wheel. `shellColor` is the midpoint of `shellGradient` so the
+  // safe-area bands and the first paint match the gradient's average tone.
+  softBlue: {
+    id: 'softBlue',
+    label: 'Soft Blue',
+    shellColor: '#7CA1C4',
+    shellGradient: ['#96B9D6', '#5D81A5'] as const,
+    wheelColor: '#F7F7F7',
+    wheelTextColor: '#5D81A5',
+    centerButtonBg: '#7CA1C4',
+    screenBgGradient: ['#2E5276', '#101A30'] as const,
+    accentColor: '#4A729A',
+  },
+  brightYellow: {
+    id: 'brightYellow',
+    label: 'Bright Yellow',
+    shellColor: '#E5B81B',
+    shellGradient: ['#FFD93A', '#C29505'] as const,
+    wheelColor: '#F7F7F7',
+    wheelTextColor: '#8C6700',
+    centerButtonBg: '#E5B81B',
+    screenBgGradient: ['#4A3A0E', '#1A1404'] as const,
+    accentColor: '#C29505',
+  },
+  softPink: {
+    id: 'softPink',
+    label: 'Soft Pink',
+    shellColor: '#D982A1',
+    shellGradient: ['#F09CB5', '#B85C7C'] as const,
+    wheelColor: '#F7F7F7',
+    wheelTextColor: '#9C3D5F',
+    centerButtonBg: '#D982A1',
+    screenBgGradient: ['#5A2233', '#23101A'] as const,
+    accentColor: '#B85C7C',
+  },
+  deepRed: {
+    id: 'deepRed',
+    label: 'Deep Red',
+    shellColor: '#B71C1C',
+    shellGradient: ['#D32F2F', '#7F0000'] as const,
+    wheelColor: '#F7F7F7',
+    wheelTextColor: '#8E1414',
+    centerButtonBg: '#B71C1C',
+    screenBgGradient: ['#5A1010', '#1A0505'] as const,
+    accentColor: '#B71C1C',
+  },
 } satisfies Record<string, AppThemeConfig>;
 
 export type ThemeId = keyof typeof themePresets;
 
+/**
+ * A chassis finish the user can pick in Settings > Themes. Alias of `ThemeId`
+ * kept as its own name because the model started as "case colors" and callers
+ * outside this file validate against a chassis list.
+ */
+export type ChassisColor = ThemeId;
+
+/**
+ * Display/swipe order of the Built-in Themes list. The four "Nano" presets are
+ * appended after the classic set so existing muscle memory and the persisted
+ * `ui.theme` ids keep working unchanged.
+ */
 export const THEME_ORDER: ThemeId[] = [
   'classic-silver',
   'u2-black-red',
   'space-gray',
   'midnight-blue',
+  'softBlue',
+  'brightYellow',
+  'softPink',
+  'deepRed',
 ];
 
 export const DEFAULT_THEME_ID: ThemeId = 'classic-silver';
 
+/** Selectable chassis finishes, in Settings > Themes display order. */
+export const CHASSIS_COLOR_ORDER: ChassisColor[] = THEME_ORDER;
+
 export function isThemeId(value: string | null | undefined): value is ThemeId {
   return value !== null && value !== undefined && value in themePresets;
+}
+
+/** Type guard for a persistable chassis finish id (same set as `isThemeId`). */
+export function isChassisColor(
+  value: string | null | undefined,
+): value is ChassisColor {
+  return isThemeId(value);
 }
 
 /**
@@ -188,13 +286,19 @@ export function resolveAppTheme(
   themeId: string | null | undefined,
   overrides?: ThemeOverrides | null,
 ): AppThemeConfig {
-  const base = themePresets[isThemeId(themeId) ? themeId : DEFAULT_THEME_ID];
+  // Annotated so the optional finish fields (`shellGradient`, `centerButtonBg`)
+  // are visible even for presets whose literal object omits them entirely.
+  const base: AppThemeConfig = themePresets[isThemeId(themeId) ? themeId : DEFAULT_THEME_ID];
   return {
     id: base.id,
     label: overrides ? `${base.label} (custom)` : base.label,
     shellColor: overrides?.shellColor ?? base.shellColor,
+    // The two finish-only fields are not user-cyclable swatches, so they always
+    // come straight from the preset (Custom Colors keeps the preset's sheen).
+    shellGradient: base.shellGradient,
     wheelColor: overrides?.wheelColor ?? base.wheelColor,
     wheelTextColor: overrides?.wheelTextColor ?? base.wheelTextColor,
+    centerButtonBg: base.centerButtonBg,
     screenBgGradient: overrides?.screenBgGradient ?? base.screenBgGradient,
     accentColor: overrides?.accentColor ?? base.accentColor,
   };
@@ -235,18 +339,31 @@ export const COLOR_SWATCHES: ColorSwatch[] = [
   { label: 'Blue', value: '#2971E7' },
   { label: 'Sky', value: '#4F93F7' },
   { label: 'Green', value: '#2FA84F' },
+  // Added with the "Nano" set so Custom Colors can cycle back to these hues and
+  // the Themes rows can name them instead of showing "Custom".
+  { label: 'Soft Blue', value: '#7CA1C4' },
+  { label: 'Ochre', value: '#8C6700' },
+  { label: 'Gold', value: '#E5B81B' },
+  { label: 'Rose', value: '#D982A1' },
+  { label: 'Crimson', value: '#B71C1C' },
 ];
 
-export type GradientSwatch = { label: string; value: readonly [string, string] };
+export type GradientSwatch = { label: string; value: ScreenGradient };
 
-/** Named [top, bottom] gradients for the screen background field. */
+/** Named screen-background gradients (2 or 3 stops) for the field cycle. */
 export const GRADIENT_SWATCHES: GradientSwatch[] = [
-  { label: 'Warm Matte', value: ['#5A5652', '#383532'] },
+  { label: 'Warm Matte', value: ['#5C5855', '#464340', '#35322F'] },
   { label: 'Charcoal', value: ['#3A3A3C', '#1C1C1E'] },
   { label: 'True Black', value: ['#1C1C1E', '#000000'] },
   { label: 'Midnight', value: ['#1B2440', '#0C1326'] },
   { label: 'Deep Blue', value: ['#22355C', '#101A30'] },
   { label: 'Crimson', value: ['#5A1A1A', '#260808'] },
+  // Weekend "Nano" screen gradients (cool/amber/rose/blood), matching the four
+  // new chassis presets.
+  { label: 'Sky Night', value: ['#2E5276', '#101A30'] },
+  { label: 'Amber Night', value: ['#4A3A0E', '#1A1404'] },
+  { label: 'Rose Night', value: ['#5A2233', '#23101A'] },
+  { label: 'Blood Red', value: ['#5A1010', '#1A0505'] },
 ];
 
 // --- tiny pure color helpers -----------------------------------------------
@@ -349,15 +466,15 @@ export const fonts = {
 
 export const radii = {
   /** Outer black screen bezel. */
-  bezel: 26,
+  bezel: 24,
   /** Inner LCD viewport, inside the bezel. */
-  screen: 18,
+  screen: 16,
   wheel: 999,
 } as const;
 
 export const spacing = {
   /** Bezel border thickness around the LCD. */
-  bezelPadding: 9,
+  bezelPadding: 10,
   lcdPaddingH: 6,
   lcdPaddingV: 4,
   lcdRowHeight: 32,

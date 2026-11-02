@@ -26,6 +26,7 @@ import { useCallback } from 'react';
 
 import { bounce, click, tick } from '../haptics/haptics';
 import { getSelectedRow, useMenuStore } from '../nav/menuStack';
+import { openAlbumOverlay } from './menus';
 import { usePlayerStore } from '../player/store';
 import { timing } from '../ui/theme';
 import type { SeekZone, Zone } from '../wheel/useClickWheel';
@@ -173,6 +174,16 @@ export function useWheelNav() {
     switch (zone) {
       case 'select': {
         click();
+        const top = menu.stack[menu.stack.length - 1];
+        // Cover Flow: Select flips the highlighted album open into its
+        // tracklist card instead of pushing a separate list frame. Once open,
+        // Select plays the highlighted track like any other list row.
+        if (top?.kind === 'coverflow' && !top.albumOverlay) {
+          void openAlbumOverlay().catch((e) => {
+            console.error('[nav] album tracklist failed', e);
+          });
+          break;
+        }
         const row = getSelectedRow();
         if (!row || row.disabled) return;
         row.onSelect?.();
